@@ -1,0 +1,88 @@
+# Workflow definition
+resources:
+  jobs:
+    creri_utils_rollback_ondemand_job:
+      name: ${bundle.target}_${bundle.name}_utils_rollback_ondemand # name in dbx UI
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Pipeline utile per lo switch del modello nella tipologia deterministica"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_as_sp}
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_1_cluster}
+      permissions: ${var.my_permissions}
+      email_notifications: ${var.my_email_notifications}
+      queue:
+        enabled: true
+
+      parameters:
+        - name: databricks_host
+          default: ${workspace.host}
+        - name: env
+          default: ${bundle.target}
+        - name: snapshot_date
+          default: "{{job.trigger.time.[iso_date]}}"
+        - name: is_cicd
+          default: "true"
+        - name: cod_flowName
+          default: UTILS_ROLLBACK_ONDEMAND
+        - name: cod_layerName
+          default: WORKFLOW
+        - name: cod_pipelineID
+          default: "{{job.id}}"
+        - name: cod_productName
+          default: ${bundle.name}
+        - name: cod_workflowName
+          default: "{{job.name}}"
+        - name: experiment_path
+          default: ${var.experiment_path}
+        - name: RunId
+          default: "{{job.run_id}}"
+
+      # Task definition
+      tasks:
+
+        - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_start_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+
+        - task_key: ServingDeterministicModel
+          depends_on:
+            - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/07_ServingDeterministicModel
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+
+        - task_key: LOGGING_end
+          depends_on:
+            - task_key: ServingDeterministicModel
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_end_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+
+        - task_key: LOGGING_error
+          depends_on:
+            - task_key: ServingDeterministicModel
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_error_flow
+            base_parameters:
+              State: "{{tasks.ServingDeterministicModel.result_state}}"
+              Error: "{{tasks.ServingDeterministicModel.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+
+      # schedule: # NO SCHEDURE REQUIRED, IT IS TRIGGERED BY MANUAL RUN ON-DEMAND
+      #   quartz_cron_expression: "0 00 6 ? * MON *" # monday at 6:00:00 am
+      #   timezone_id: Europe/Amsterdam #  Amsterdam, Berlin, Bern, Rome, Stockholm
+      #   pause_status: PAUSED

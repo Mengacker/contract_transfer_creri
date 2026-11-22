@@ -1,0 +1,159 @@
+resources:
+  jobs:
+    creri_infer_serving_weekly:
+      name: ${bundle.target}_${bundle.name}_infer_serving_weekly
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Pipeline di inferenza per individuare lo scoring del modello"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_as_sp}
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_standard_cluster}
+        - job_cluster_key: creri_job_cluster_log
+          new_cluster: ${var.ai_logging_cluster}
+      permissions: ${var.my_permissions}
+      email_notifications: ${var.my_email_notifications}
+      queue:
+        enabled: true
+
+      parameters:
+        - name: databricks_host
+          default: ${workspace.host}
+        - name: experiment_path
+          default: ${var.experiment_path}
+        - name: is_cicd
+          default: "true"
+        - name: cod_flowName
+          default: INFER_SERVING
+        - name: cod_layerName
+          default: WORKFLOW
+        - name: cod_pipelineID
+          default: "{{job.id}}"
+        - name: cod_productName
+          default: ${bundle.name}
+        - name: cod_workflowName
+          default: "{{job.name}}"
+        - name: env
+          default: ${bundle.target}
+        - name: RunId
+          default: "{{job.run_id}}"
+        - name: snapshot_date
+          default: "{{job.trigger.time.[iso_date]}}"
+
+      tasks:
+
+        - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_start_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+        - task_key: METRICS_setup_flow
+          depends_on:
+            - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/01_MetricsSetupFlowcreriWeekly
+            base_parameters:
+              cod_layerName: PREP_METRICS
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+        - task_key: METRICS_materialization
+          depends_on:
+            - task_key: METRICS_setup_flow
+          for_each_task:
+            inputs: "{{tasks.METRICS_setup_flow.values.input_params}}"
+            concurrency: 6
+            task:
+              task_key: METRICS_iteration
+              run_job_task:
+                job_id: ${resources.jobs.creri_metrics_materialization.id}
+                job_parameters:
+                  cod_layerName: PREP_METRICS
+                  input_params: "{{input}}"
+                  cod_productName: "{{tasks.METRICS_setup_flow.values.cod_productName}}"
+
+        # - task_key: MasterInferenceCreation
+        #   depends_on:
+        #     - task_key: METRICS_materialization
+        #   notebook_task:
+        #     notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/05_InferenceMastersMaterialization
+        #     source: WORKSPACE
+        #   job_cluster_key: creri_job_cluster
+        #   libraries:
+        #     - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+        #     - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+
+        # - task_key: SyncTablesRefreshing
+        #   depends_on:
+        #     - task_key: MasterInferenceCreation
+        #   notebook_task:
+        #     notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/05_SyncTablesRefreshing
+        #     source: WORKSPACE
+        #   job_cluster_key: creri_job_cluster
+        #   libraries:
+        #     - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+        #     - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+
+        # - task_key: ServingEndpointsTest
+        #   depends_on:
+        #     - task_key: SyncTablesRefreshing
+        #   notebook_task:
+        #     notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/07_ServingEndpointsTest
+        #     source: WORKSPACE
+        #   job_cluster_key: creri_job_cluster
+        #   libraries:
+        #     - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+        #     - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+
+        # - task_key: ServingModel
+        #   depends_on:
+        #     - task_key: SyncTablesRefreshing
+        #   notebook_task:
+        #     notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/07_ServingScoringModel
+        #     source: WORKSPACE
+        #   job_cluster_key: creri_job_cluster
+        #   libraries:
+        #     - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+        #     - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+
+        - task_key: ServingModel
+          depends_on:
+            - task_key: METRICS_materialization
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/07_ServingDeterministicModel
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+
+        - task_key: LOGGING_end
+          depends_on:
+            # - task_key: ServingEndpointsTest
+            - task_key: ServingModel
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_end_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+
+        - task_key: LOGGING_error
+          depends_on:
+            - task_key: ServingModel
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_error_flow
+            base_parameters:
+              State: "{{tasks.MasterInferenceCreation.result_state}} -> {{tasks.ServingModel.result_state}}"
+              Error: "{{tasks.MasterInferenceCreation.error_code}} -> {{tasks.ServingModel.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+      schedule:
+        quartz_cron_expression: "0 0 7 ? * MON *" # monday at 7:00:00 am
+        timezone_id: Europe/Amsterdam #  Amsterdam, Berlin, Bern, Rome, Stockholm
+        pause_status: PAUSED

@@ -1,0 +1,98 @@
+sresources:
+  jobs:
+    creri_customer_base_materialization:
+      name: ${bundle.target}_${bundle.name}_customer_base_materialization
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Pipeline di materializzazione dei dati delle customer bases"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_as_sp}
+      max_concurrent_runs: 10
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_standard_cluster}
+        - job_cluster_key: creri_job_cluster_log
+          new_cluster: ${var.ai_logging_cluster}
+      permissions: ${var.my_permissions}
+      # email_notifications: ${var.my_email_notifications}
+      queue:
+        enabled: true
+      parameters:
+        - name: cod_layerName
+          default: PREP_CUSTOMER_BASE
+        - name: cod_pipelineID
+          default: "{{job.id}}"
+        - name: input_params
+          default: "{'name': 'MetricaSdfAttivazioneAttivi',  'type':
+            'METRICS',  'certified': True,  'src':
+            'metrics.sito_di_fornitura',  'table':
+            'sbx_catalog.data.ih_MetricaSdfAttivazioneAttivi',  'keys':
+            ['PK_ACCOUNT', 'PK_CONTO_FATT', 'PK_PDF']}"
+        - name: runId
+          default: "{{job.run_id}}"
+        - name: snapshot_date
+          default: 2024-01-01
+        - name: cod_productName
+          default: "generic"
+
+      tasks:
+
+        - task_key: CUSTOMER_BASE_logging_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/CUSTOMER_BASE/CUSTOMER_BASE_logging_start
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+          max_retries: 2
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+        - task_key: CUSTOMER_BASE
+          depends_on:
+            - task_key: CUSTOMER_BASE_logging_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/02_CustomerBasesMaterialization
+            base_parameters:
+              dat_startDate: "{{job.start_time.iso_datetime}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          max_retries: 2
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+        - task_key: CUSTOMER_BASE_logging_error
+          depends_on:
+            - task_key: CUSTOMER_BASE
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/CUSTOMER_BASE/CUSTOMER_BASE_logging_error
+            base_parameters:
+              dat_startDate: "{{job.start_time.iso_datetime}}"
+              result_state: "{{tasks.CUSTOMER_BASE.result_state}}"
+              error_code: "{{tasks.CUSTOMER_BASE.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+          max_retries: 2
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+        - task_key: CUSTOMER_BASE_logging_success
+          depends_on:
+            - task_key: CUSTOMER_BASE
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/CUSTOMER_BASE/CUSTOMER_BASE_logging_success
+            base_parameters:
+              dat_startDate: "{{job.start_time.iso_datetime}}"
+              result_state: "{{tasks.CUSTOMER_BASE.result_state}}"
+              error_code: "{{tasks.CUSTOMER_BASE.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+          max_retries: 2
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+      # schedule:  # NO SCHEDULE REQUIRED, IT IS TRIGGERED BY THE ORCHESTRATOR JOB
+      #   quartz_cron_expression: "0 0 4 1 * ? *" # 1st day of the month at 04:00:00 am
+      #   timezone_id: Europe/Amsterdam #  Amsterdam, Berlin, Bern, Rome, Stockholm
+      #   pause_status: PAUSED

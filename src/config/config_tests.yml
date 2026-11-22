@@ -1,0 +1,112 @@
+# ---------------------------------------------------------------------------- #
+#           Configuration of the inputs to test endpoints and models           #
+# ---------------------------------------------------------------------------- #
+
+serving_endpoint:
+  # EXAMPLE REQUESTS TO TEST THE ONLINE-TABLES ENDPOINT
+  json_test_request_cfpiva_ep:
+    {"dataframe_records":
+        [{"COD_FISCALE_PIVA_CLIIN":"XXXXXX00X00X000X"},{"COD_FISCALE_PIVA_CLIIN":"12345678910"}]
+    }
+  json_test_request_podpdr_ep:
+    {"dataframe_records":
+        [{"POD_PDR":"IT000E12345678"},{"POD_PDR":"01234567891011"},{"POD_PDR":""}] # pragma: allowlist secret
+    }
+
+
+  # EXAMPLE REQUESTS TO TEST THE SERVING ENDPOINT OF SCORING MODEL
+  json_test_request_model_ep:
+    - {"dataframe_records":[
+          {
+            "INPUT_JSON": '{"SegmentoVolturante": "Residenziale", "CodiceFiscale": "XXXXXX00X00X000X", "NomeCognome": "''NOM''E'' |CO''GNOME''", "TipoControlloCreditizio": "Modello", "CanaleAcquisizione": "WEB", "CodiceAgenzia": "AGWEBAPP", "ModalitaPagamentoVolturante": "Domiciliazione bancaria", "MailVolturante": "prova1@eniplenitude.com", "CellulareVolturante": "666", "ClienteVolturante": "00", "ModalitaOperativa": "Voltura", "Forniture": [{"Commodity": "GAS", "POD/PDR": "01234567891010", "ProductFamily": "Commodity", "ProductType": "Prodotto Commodity Gas"}], "ResidenteNonResidente": "Domestico non Residente"}',
+          },
+        ],
+    }
+    - {"dataframe_records":[
+          {
+            "INPUT_JSON": '{"SegmentoVolturante": "Residenziale", "CodiceFiscale": "XXXXXX00X00X000X", "NomeCognome": "Caso|Giallo", "TipoControlloCreditizio": "Modello", "CanaleAcquisizione": "WEB", "CodiceAgenzia": "AGWEBAPP", "ModalitaPagamentoVolturante": "Domiciliazione bancaria", "MailVolturante": "prova2@eniplenitude.com", "CellulareVolturante": "666", "ClienteVolturante": "00", "ModalitaOperativa": "Voltura", "Forniture": [{"Commodity": "GAS", "POD/PDR": "", "ProductFamily": "Commodity", "ProductType": "Prodotto Commodity Gas"}], "ResidenteNonResidente": "Domestico non Residente"}',
+          },
+        ],
+    }
+
+# MASKED POD/PDR OF YELLOW CASES TO TEST DETERMINISTIC MODEL
+deterministic_model:
+  json_test_podpdr_yellow_list:
+    - {"dataframe_records":[
+          {
+            "INPUT_JSON": '{"Forniture": [{"POD/PDR": "fake_case"}]}', # fake green case
+          },
+        ],
+    }
+    - {"dataframe_records":[
+          {
+            "INPUT_JSON": '{"Forniture": [{"POD/PDR": ""}]}', # real yellow case
+          },
+        ],
+    }
+    - {"dataframe_records":[
+          {
+            "INPUT_JSON": '{"Forniture": [{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""},{"POD/PDR": ""}]}', # multy-fornitures real yellow cases
+          },
+        ],
+    }
+
+#  PK_PROPOSAL_LINE_ITEM TO TEST SCORING MODEL
+scoring_model:
+  final_training_master: # n° 30 selected cases
+    - { 'description': 'no unpaid credit true negative',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'no unpaid credit false negative',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'no unpaid credit false positive',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'no unpaid credit true positive',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'scoring green true negative',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'scoring green false negative',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'scoring yellow true negative',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'scoring yellow false negative',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'scoring red false positive',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+    - { 'description': 'scoring red true positive',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-17'
+      }
+
+#  PK_PROPOSAL_LINE_ITEM TO TEST SERVING MODEL
+serving_model:
+  final_training_master: # n° 15 selected cases
+    - { 'description': 'inferenced red',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-12-04'
+      }
+    - { 'description': 'inferenced red',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-24'
+      }
+    - { 'description': 'inferenced yellow',
+        'PK_PROPOSAL_LINE_ITEM': [''],
+        'extraction_date': '2025-11-24'
+      }

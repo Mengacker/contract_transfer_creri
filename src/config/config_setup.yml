@@ -1,0 +1,481 @@
+# ---------------------------------------------------------------------------- #
+#                                                                              #
+#                       GENERAL AND RELEASE DEFINITIONS:                       #
+#                           metadata and logging                               #
+#                                                                              #
+# ---------------------------------------------------------------------------- #
+
+# metadata:
+#   - cod_productname: creri
+#     des_productProject: Contract Transfer Credit Risk
+#     des_businessarea: CRE
+#     cod_teamowner: Io
+#     des_deployNote: Maintenance
+#     cod_modelType: classification
+#     cod_framework: sklearn
+#     cod_schemaName: creri
+#     des_repository: contract_transfer_credit_risk
+#     cod_environment: 
+#     cod_stato: production
+
+logging:
+  processor:
+    schema: monitoring
+    table: lg_processmonitor_ai
+
+
+# ---------------------------------------------------------------------------- #
+#                                                                              #
+#                            MAIN CONFIGURATIONS:                              #
+#             environments, catalogs, schemas, experiment_paths                #
+#                                                                              #
+# ---------------------------------------------------------------------------- #
+
+environment:
+
+  dev:
+    description: true development environment in a "business" sandbox
+    env_workspace: P1
+    databricks_host: https://....azuredatabricks.net/ # databricks host di P1
+    schema: data
+    # schema_atum: atum
+    catalog: sbx_catalog
+    experiment_path: /Shared/DataScience/Exp/creri/dev_creri_exp
+
+  test-dpp:
+    description: test industrialized environment
+    databricks_host: https://....azuredatabricks.net/
+    env_workspace: T3
+    schema: creri
+    catalog: t_catalog
+
+  qa-dpp:
+    description: quality (preprod) industrialized environment with approval gate (used only in few cases in the Italy-company)
+    databricks_host: https://....azuredatabricks.net/
+    env_workspace: Q3
+    schema: creri
+    catalog: q_catalog
+
+  prod-sbx:
+    description: production environment (actual used as development environment in the Italy-company)
+    databricks_host: https://....azuredatabricks.net/
+    env_workspace: P1
+    schema: creri
+    catalog: p_catalog
+
+  prod-dpp:
+    description: production industrialized environment with approval gate
+    databricks_host: https://....azuredatabricks.net/
+    env_workspace: P3
+    schema: creri
+    catalog: p_catalog
+
+
+
+# ---------------------------------------------------------------------------- #
+#                                  MODELING:                                   #
+#       models, functions UDF, volumes, queries and materialized queries       #
+# ---------------------------------------------------------------------------- #
+
+modeling:
+  model_deterministic:
+    name: creri_model_deterministic
+    description: Deterministic model, i.e. a deterministic logic that check if a POD/PDR is present in a yellow-list of POD/PDR with unpaid credits arrears. It is deployed only on-demand if the roll-back is required.
+
+  model_scoring:
+    name: creri_model_scoring
+    description: Binary classification model of the customer with unpaid credit arrears. It is the model trained with the machine learning process.
+
+  model_serving:
+    name: creri_model_serving
+    description: Serving model for the three-category classification of customers at risk of fraudulent default. This is the model that post-processes the prediction of the scoring model contained within it.
+
+
+# ---------------------------------------------------------------------------- #
+#                                   SERVING:                                   #
+#                   endpoints, on-line tables, functions UDF                   #
+# ---------------------------------------------------------------------------- #
+
+serving_endpoint:
+  # ep_scoring:
+  #   name: antifrode_volture
+  #   src: ["antifrode-volture-model-scoring","antifrode-volture-model-deterministic"]
+  #   description: attualmente in produzione MA CHE PER CAMBIARLO A FRONT-END VA RICHIESTA UNA CHANGE!
+  ep_scoring:
+    name_for_test: creri_sep_infer_realtime # non è stato possibile aggiornare l'URL con il nome del nuovo Databricks endpoint nella function app di API Capabilities, si userà quindi tale nome solo per gli endpoint di test in ambiente P1
+    name: antifrode_volture # quindi si è tornato al vecchio nome che era in produzione in ambiente P1 in fase di dev
+    src: [creri_model_serving,creri_model_deterministic]
+    description: The endpoint that puts the model into service.
+
+
+  ep_mstr_volturante:
+    name: creri_sep_mstr_volturante
+    src: [creri_udf_infer_mstr_volturante]
+    description: The endpoint that serves the UDF that allows to query the online inference table of incoming customer.
+    primary_key: COD_FISCALE_PIVA_CLIIN
+
+  ep_mstr_volturato:
+    name: creri_sep_mstr_volturato
+    src: [creri_udf_infer_mstr_volturato]
+    description: The endpoint that serves the UDF that allows to query the online inference table of outgoing customer.
+    primary_key: POD_PDR
+
+  udf_spec_volturante:
+    name: creri_udf_infer_mstr_volturante
+    src: creri_infer_mstr_volturante
+    description: The User-Defined Function (UDF) that allows to query the online inference table of incoming customer.
+    primary_key: COD_FISCALE_PIVA_CLIIN
+
+  udf_spec_volturato:
+    name: creri_udf_infer_mstr_volturato
+    src: creri_infer_mstr_volturato
+    description: The User-Defined Function (UDF) that allows to query the online inference table of outgoing customer.
+    primary_key: POD_PDR
+
+
+  oltab_volturante:
+    # name: creri_oltab_infer_mstr_volturante # OLD correct name
+    name: creri_udf_oltab_infer_mstr_volturante # NEW used name in P3
+    name_for_test: oltab_creri_udf_infer_mstr_volturante # TEST name used in P1
+    src: creri_infer_mstr_volturante
+    description: The "creri_infer_mstr_volturante" delta table replicated in the on-line table format.
+    primary_key: COD_FISCALE_PIVA_CLIIN
+
+  oltab_volturato:
+    # name: creri_oltab_infer_mstr_volturato # OLD correct name
+    name: creri_udf_oltab_infer_mstr_volturato # NEW used name in P3
+    name_for_test: oltab_creri_udf_infer_mstr_volturato # TEST name used in P1
+    src: creri_infer_mstr_volturato
+    description: The "creri_infer_mstr_volturato" delta table replicated in the on-line table format.
+    primary_key: POD_PDR
+
+  feature_store:
+    name: mlops-creri-online-store
+    description: The Lakebase Postgres project created to use the feature store framework. So, it allows to create the sync tables, i.e. the on-line tables.
+    src: https://adb-5973735350228664.4.azuredatabricks.net/lakebase/projects/971ba4a0-790e-4320-bb0b-71ffb27b521f?database=creri
+
+
+# ---------------------------------------------------------------------------- #
+#                            DATA PREPARATIONS:                                #
+#     metrics, targets, customer base, master, inference and outputs tables    #
+# ---------------------------------------------------------------------------- #
+
+targets:
+  - name: creri_met_targetcontofattclientimorosi
+    class_name: TargetContoFattClientiMorosi
+    src: src.features.target_clienti_morosi
+    certified: False
+    type: PREP_METRICS
+    primary_key: [COD_CONTO_NETA]
+    join_key: [PK_CONTO_FATT]
+    description: Custom table elaborated to make the target variable of the prediction model.
+    materialization_period: Only the months prior to 15 months ago starting June 2022.
+    snapshot_overwrite: False
+    historicization: versioned
+    target_column: FLG_CLI_MOROSO
+    today_minus_n_months: "15"
+    view_on_modellato_layer: True
+    fields_to_mask: ['PK_CONTO_FATT','COD_CONTO_NETA','ID_CONTO_CLIENTE_NETA']
+
+metrics:
+  - name: creri_met_metricaflgvolturelordenette
+    class_name: MetricaFlgVoltureLordeNette
+    src: metrics.proposal_line_item
+    certified: True
+    type: PREP_METRICS
+    primary_key: [PK_PROPOSAL_LINE_ITEM]
+    join_key: [PK_PROPOSAL_LINE_ITEM]
+    description: Materialization of the certified metrics class essential for the creation of the Customer Base.
+    materialization_period: Every month starting from June 2022 up to the month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    special_use: Used also in the model evaluation phase.
+    view_on_modellato_layer: True
+    fields_to_mask: []
+
+
+  - name: creri_met_pontesdfproposal
+    class_name: MetricaPonteSdfProposal
+    src: metrics.sito_di_fornitura #.ponte_sdf_proposal.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [FK_PROPOSAL_LINE_ITEM]
+    join_key: [PK_ACCOUNT, PK_CONTO_FATT, PK_PDF]
+    description: Materialization of the certified metrics class essential for the creation of the Customer Base.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    fields_to_mask: []
+
+  # To build the masters
+  - name: creri_met_morositapregressacliente
+    class_name: MetricheMorositaPregressaCliente
+    src: metrics.cod_fiscale_piva #.cod_fiscale_piva_morosita_pregressa.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [COD_FISCALE_PIVA]
+    join_key: [COD_FISCALE_PIVA]
+    description: Materialization of the certified metrics class.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    view_on_modellato_layer: True
+    fields_to_mask: ['COD_FISCALE_PIVA']
+
+  - name: creri_met_morositapregressapodpdr
+    class_name: MetricheMorositaPregressaPodPdr
+    src: metrics.pod_pdr #.pod_pdr_morosita_pregressa.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [POD_PDR]
+    join_key: [POD_PDR]
+    description: Materialization of the certified metrics class.
+    materialization_period: Every month starting from June 2022 up to the month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    special_use: Used also to extract the yellow-list of POD/PDR.
+    view_on_modellato_layer: True
+    fields_to_mask: ['POD_PDR']
+
+  - name: creri_met_dataultletturaattivswinpwr
+    class_name: MetricaDataUltLetturaAttivSwinPwr
+    src: metrics.point_of_delivery #.data_ult_lettura_attiv_swin_pwr.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [COD_POD]
+    join_key: [COD_POD]
+    description: Materialization of the certified metrics class.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    fields_to_mask: ['COD_POD']
+
+  - name: creri_met_dataultletturaattivswingas
+    class_name: MetricaDataUltLetturaAttivSwinGas
+    src: metrics.punto_di_riconsegna #.data_ult_lettura_attiv_swin_gas.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [COD_PDR]
+    join_key: [COD_PDR]
+    description: Materialization of the certified metrics class.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    fields_to_mask: ['COD_PDR']
+
+  - name: creri_met_metricapdfpodpdrgtwv
+    class_name: MetricaPdfPodPdrGtwV
+    src: metrics.punto_di_fornitura #.pdf_pod_pdr_gtw_v.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [COD_PDF]
+    join_key: [COD_PDF]
+    description: Materialization of the certified metrics class.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    fields_to_mask: ['CODICE_POD_PDR','IND_FORN_IND']
+
+  - name: creri_met_clienteattributi
+    class_name: MetricaClienteAttributi
+    src: metrics.account #.cliente_attributi.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [PK_ACCOUNT]
+    join_key: [PK_ACCOUNT]
+    description: Materialization of the certified metrics class.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    fields_to_mask: ['CLI_SEX','CLI_NAZTA','CLI_AGE']
+
+  - name: creri_met_accounttocodfiscalepiva
+    class_name: AccountToCodFiscalePiva
+    src: src.features.account_to_cod_fiscale_piva #.account_to_cod_fiscale_piva.py
+    certified: False
+    type: PREP_METRICS
+    primary_key: [PK_ACCOUNT]
+    join_key: [PK_ACCOUNT]
+    description: Custom table elaborated to make the link between the PK Account and the customers Codice Fiscale/Partita Iva.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    fields_to_mask: ['COD_FISCALE','PIVA','NOME','COGNOME','EMAIL','PEC','TELEFONO','COD_FISCALE_PIVA']
+
+  - name: creri_met_sdfattivazioneattivi
+    class_name: MetricaSdfAttivazioneAttivi
+    src: metrics.sito_di_fornitura #.sdf_attivazione_attivi.py
+    certified: True
+    type: PREP_METRICS
+    primary_key: [PK_PDF]
+    join_key: [PK_ACCOUNT, PK_CONTO_FATT, PK_PDF]
+    description: Materialization of the certified metrics class.
+    materialization_period: Months prior to 15 months ago starting June 2022 and the last month before the current one.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "0"
+    fields_to_mask: []
+
+customer_bases:
+  - name: creri_train_cb_volturato
+    class_name: cbVolturato
+    src: src.customerbases.custom_base
+    src_metrics: [MetricaFlgVoltureLordeNette, MetricaPonteSdfProposal, MetricaPdfPodPdrGtwV]
+    certified: False
+    type: PREP_CUSTOMER_BASE
+    primary_key: [PK_PROPOSAL_LINE_ITEM]
+    join_key: [PK_PROPOSAL_LINE_ITEM]
+    description: Customer Base dataset table of the outgoing customers.
+    materialization_period: Only the months prior to 15 months ago starting June 2022.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "15"
+    fields_to_mask: ['POD_PDR','COD_POD','COD_PDR','IND_FORN_IND','COD_FISCALE','PIVA','NOME','COGNOME','EMAIL','PEC','TELEFONO','COD_FISCALE_PIVA']
+
+  - name: creri_train_cb_volturante
+    class_name: cbVolturante
+    src: src.customerbases.custom_base
+    src_metrics: [MetricaFlgVoltureLordeNette, MetricaPonteSdfProposal, MetricaPdfPodPdrGtwV]
+    certified: False
+    type: PREP_CUSTOMER_BASE
+    primary_key: [PK_PROPOSAL_LINE_ITEM]
+    join_key: [PK_PROPOSAL_LINE_ITEM]
+    description: Customer Base dataset table of the incoming customers.
+    materialization_period: Only the months prior to 15 months ago starting June 2022.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "15"
+    fields_to_mask: ['POD_PDR','COD_POD','COD_PDR','IND_FORN_IND','COD_FISCALE','PIVA','NOME','COGNOME','EMAIL','PEC','TELEFONO','COD_FISCALE_PIVA']
+
+
+master_training:
+  - name: creri_train_mstr_volturato
+    class_name: VolturatoTrainMaster
+    src: src.masters.masters
+    src_cb: cbVolturato
+    src_metrics: [MetricaClienteAttributi, MetricaSdfAttivazioneAttivi, MetricheMorositaPregressaCliente, MetricheMorositaPregressaPodPdr, MetricaDataUltLetturaAttivSwinGas, MetricaDataUltLetturaAttivSwinPwr]
+    # MetricaSdfAttivazioneAttivi non serve al volturato
+    type: PREP_MASTER_TRAINING
+    primary_key: [PK_PROPOSAL_LINE_ITEM]
+    join_key: [PK_PROPOSAL_LINE_ITEM]
+    description: Master training dataset table of the outgoing customers.
+    materialization_period: Only the months prior to 15 months ago starting June 2022.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "15"
+    fields_to_mask: ['COD_FISCALE_PIVA','COD_FISCALE','PIVA','POD_PDR','COD_POD','COD_PDR','COGNOME','TELEFONO','EMAIL','CLI_AGE']
+
+  - name: creri_train_mstr_volturante
+    class_name: VolturanteTrainMaster
+    src: src.masters.masters
+    src_cb: cbVolturante
+    src_metrics: [MetricaSdfAttivazioneAttivi, MetricheMorositaPregressaCliente, TargetContoFattClientiMorosi]
+    type: PREP_MASTER_TRAINING
+    primary_key: [PK_PROPOSAL_LINE_ITEM]
+    join_key: [PK_PROPOSAL_LINE_ITEM]
+    description: Master training dataset table of the incoming customers.
+    materialization_period: Only the months prior to 15 months ago starting June 2022.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "15"
+    fields_to_mask: ['POD_PDR','COD_FISCALE_PIVA','COD_FISCALE','PIVA','COGNOME','TELEFONO','EMAIL']
+
+master_training_final:
+  - name: creri_train_mstr_credit_check_volture
+    class_name: FinalTrainMaster
+    src: src.masters.final_training_master
+    src_cb: ''
+    src_metrics: [VolturatoTrainMaster, VolturanteTrainMaster]
+    type: PREP_MASTER_TRAINING_FINAL #PREP_MASTER_TRAINING
+    primary_key: [PK_PROPOSAL_LINE_ITEM]
+    join_key: [PK_PROPOSAL_LINE_ITEM]
+    description: Final master training dataset table of both outgoing and incoming customers. It also contains the fields produced by feature engineering.
+    materialization_period: Only the months prior to 15 months ago starting June 2022.
+    snapshot_overwrite: False
+    historicization: versioned
+    today_minus_n_months: "15"
+    fields_to_mask: ['POD_PDR','COD_FISCALE_PIVA','COGNOME','TELEFONO','EMAIL','POD_PDR_CLIIN','COD_FISCALE_PIVA_CLIIN','COGNOME_CLIIN','TELEFONO_CLIIN','EMAIL_CLIIN','CLI_AGE']
+
+
+master_inference:
+  - name: creri_infer_mstr_volturato
+    class_name: VolturatoInferMaster
+    src: src.masters.volturato_inference_master
+    src_cb: ''
+    src_metrics: [MetricheMorositaPregressaPodPdr, MetricaDataUltLetturaAttivSwinPwr, MetricaDataUltLetturaAttivSwinGas, MetricaPdfPodPdrGtwV, MetricaSdfAttivazioneAttivi, MetricaClienteAttributi, AccountToCodFiscalePiva, MetricheMorositaPregressaCliente]
+    type: PREP_MASTER_INFERENCE
+    primary_key: [POD_PDR]
+    join_key: [POD_PDR]
+    online_table: creri_udf_oltab_mstr_volturato
+    description: Master inference dataset table of the outgoing customers.
+    materialization_period: The first day of the week respect the current one.
+    historicization: actualzied
+    today_minus_n_months: 0
+    view_on_modellato_layer: True
+    fields_to_mask: ['POD_PDR','COD_FISCALE_PIVA','NOME','COGNOME','EMAIL','PEC','TELEFONO','CLI_AGE','IND_FORN_CAP','IND_FORN_COMUNE','FK_CONTO_FATT','CLI_COM','RAG_SOCIALE']
+
+  - name: creri_infer_mstr_volturante
+    class_name: VolturanteInferMaster
+    src: src.masters.volturante_inference_master
+    src_cb: ''
+    src_metrics: [MetricheMorositaPregressaCliente]
+    type: PREP_MASTER_INFERENCE
+    primary_key: [COD_FISCALE_PIVA_CLIIN]
+    join_key: [COD_FISCALE_PIVA_CLIIN]
+    online_table: creri_udf_oltab_mstr_volturante
+    description: Master inference dataset table of the incoming customers.
+    materialization_period: The first day of the week respect the current one.
+    historicization: actualzied
+    today_minus_n_months: 0
+    view_on_modellato_layer: True
+    fields_to_mask: ['COD_FISCALE_PIVA_CLIIN']
+
+master_inference_versioned:
+  - name: creri_infer_mstr_volturato_ver
+    src: creri_infer_mstr_volturato
+    primary_key: [POD_PDR]
+    join_key: [POD_PDR]
+    description: Storicization of master inference dataset table of the outgoing customers.
+    materialization_period: The first day of the week respect the current one and then progressively historicized.
+    historicization: actualzied
+    view_on_modellato_layer: True
+    fields_to_mask: ['POD_PDR','COD_FISCALE_PIVA','NOME','COGNOME','EMAIL','PEC','TELEFONO','CLI_AGE','IND_FORN_CAP','IND_FORN_COMUNE','FK_CONTO_FATT','CLI_COM','RAG_SOCIALE']
+
+  - name: creri_infer_mstr_volturante_ver
+    src: creri_infer_mstr_volturante
+    primary_key: [COD_FISCALE_PIVA_CLIIN]
+    join_key: [COD_FISCALE_PIVA_CLIIN]
+    description: Storicization of master inference dataset table of the incoming customers.
+    materialization_period: The The first day of the week respect the current one and then progressively historicized.
+    historicization: actualzied
+    view_on_modellato_layer: True
+    fields_to_mask: ['COD_FISCALE_PIVA_CLIIN']
+
+inference_monitoring:
+
+  # endpoint_payload_table:
+  - name: creri_out_infer_payload
+    src: creri_sep_infer_realtime
+    primary_key: [databricks_request_id]
+    join_key: databricks_request_id
+    description: Request-response payload table of the endpoint serving the model.
+    view_on_modellato_layer: False
+    fields_to_mask: ['request']
+
+  # output_result_table:
+  - name: creri_out_infer_final
+    src: [creri_out_infer_payload, creri_infer_mstr_volturante, creri_infer_mstr_volturato]
+    primary_key: [request_PODPDR_id]
+    join_key: request_PODPDR_id
+    description: Table of final outputs, i.e. the payload table joined with the two inference tables.
+    view_on_modellato_layer: True
+    fields_to_mask: ['request_PODPDR_id','request','COD_FISCALE_PIVA','CodiceFiscale','PartitaIva','NomeCognome','MailVolturante','PECVolturante','CellulareVolturante','POD_PDR','COGNOME_CLIIN','TELEFONO_CLIIN','EMAIL_CLIIN','COGNOME','TELEFONO','EMAIL','CLI_AGE','RagioneSociale','FlagVulnerabilityVolturante','CLI_COM','IND_FORN_CAP','IND_FORN_COMUNE','FK_CONTO_FATT']
