@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------------------- #
+#      Configuration of parameters and attributes for modeling activities:     #
+#             tuning, training, evaliation, comparison and deploy              #
+# ---------------------------------------------------------------------------- #
+
+logger_config:
+  level: INFO
+
+partition_date: snapshot_date
+
+random_state: 42
+
+splitting_data_params:
+  train_perc: 0.60
+  calib_perc: 0.20
+  test_perc: 0.20
+
+tuning_params:
+  eval_metric: f1_score # https://scikit-learn.org/1.5/modules/model_evaluation.html
+  f1_score_average: micro
+  metric_direction: maximize
+  early_stop: True
+  max_estimators: 500 # 1000 # max numbers of estimators reachable during tuning
+  stopping_round: 10 # 100 troppo tempo computazionale!
+  n_trials: 40 # 50
+  n_folds: 4
+  tunable_params:
+    - lambda_l1
+    - lambda_l2
+    - num_leaves
+    - feature_fraction
+    - min_child_samples
+    - bagging_fraction
+    - bagging_freq
+    - scale_pos_weight
+    # - colsample_bytree
+    # - max_depth
+    # - learning_rate
+
+training_params:
+  eval_metrics: # the metric use to track model fitting during training
+    - binary
+    - auc
+  target_col: target
+  lgb_fixed_params:
+    # Default fixed params
+    objective: binary
+    boosting_type: gbdt
+    max_depth: -1
+    # Fixed custom params
+    n_estimators: 1000
+    max_bin: 1000
+    random_state: 42
+    learning_rate: 0.08 # 0.01
+    verbose: -1
+
+# Params for model comparison
+comparison_params:
+  metric_name: roc_auc_score
+  greater_is_better: True
+  metric_values:
+    min_absolute_metric: 0.5
+    min_absolute_change: 0.0001
+    min_relative_change: None
+
+mlflow_config:
+  tracking_uri: databricks-uc
+  mlflow_logging: True
+  run_name:
+    data_preparation: data_preparation_run
+    tuning: tuning_run
+    training: training_run
+    evaluation: evaluation_test_run
+    comparison: comparison_run
+    serving: scoring_serving_run
+    rollback: deterministic_rollback_run
+    monitoring: monitoring_run
+    batch_inference: batch_inference_run
+  tags:
+    data_preparation:
+      mlflow.note.content: "Run to prepare data for the modeling process."
+    tuning:
+      mlflow.note.content: "Run to log tuning process, with best hyperparameters found. There is a child run for each set of parameters tested."
+    training:
+      mlflow.note.content: "Run to log final training on full dataset, with autolog functionalities. So the model is deployed by MLflow."
+    evaluation:
+      mlflow.note.content: "Run to log evaluation metrics on test set."
+    comparison:
+      mlflow.note.content: "Run to compare challenger model with a threshold metric and against the champion model. If the challenger wins it will be prometed to champion."
+    serving:
+      mlflow.note.content:  "Run to deploy the wrapper of scoring model by MLflow and then to serve the latter in the endpoint."
+    rollback:
+      mlflow.note.content:  "Run to deploy the deterministic model by MLflow and then to serve the latter in the endpoint."
+    monitoring:
+      mlflow.note.content: "Run to create a final output results table and to monitor on the latter errors and data drifts, then, if there are, to send email notifications."
+    batch_inference:
+      mlflow.note.content: "Run to do a batch inference time after the real-time inference has been made."

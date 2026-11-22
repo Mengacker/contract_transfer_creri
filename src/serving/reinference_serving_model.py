@@ -1,0 +1,570 @@
+import json
+from datetime import date
+import re
+import pandas as pd
+from pyspark.sql import SparkSession
+
+from mlflow.pyfunc import PythonModel
+from typing import Optional, Any, Dict, List
+
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+spark = SparkSession.builder.getOrCreate()
+
+
+class CustomServingModel(PythonModel):
+    """
+    Class to wrap any model's flavor in to a PyFunc-PythonModel, so that MLflow can deploy it to the registry.
+    The Scoring model is then wrapped to become a three-class classification model. The latter will be the Serving model to outputs the traffic light classification and its associated score.
+    """
+
+    def __init__(
+        self,
+        model: PythonModel,
+        dtypes_map: Dict[str, List[str]],
+        encode_maps: Dict[str, Dict[str, str]],
+        yellow_red_threshold: float,
+        yellow_green_threshold: float,
+        yellow_list: List[str],
+        databricks_host: str,
+        token_ep: str,
+        tables_endpoints: Dict[str, str] = {
+            "POD_PDR": None,
+            "COD_FISCALE_PIVA_CLIIN": None,
+        },
+        use_requests: bool = False,
+        spark: SparkSession = spark,
+    ):
+        """
+        Initialization method to load into the serving script the trained champion scoring model, its thresholds, predictors informations, the yellow list of POD/PDR and the on-line tables endpoint name.
+        Arguments:
+            model (PythonModel): the Scoring model.
+            dtypes_map (dictionary[string, list[string]]): a dictionary with the datatype as keys and the list of the predictors as values.
+            encode_maps (dictionary[string, dictionary[string, string]]): a dictionary with the predictors as keys and the encoding map as values.
+            yellow_red_threshold (float): the score threshold for classifying between red and yellow traffic lights.
+            yellow_green_threshold (float): the score threshold for classifying between yellow and green traffic lights.
+            yellow_list (list[string]): list of POD/PDR tagged as defaulters.
+            databricks_host (string): the Databricks host (not the endpoint URL).
+            token_ep (string): the authentication token.
+            tables_endpoints (dictionary[string, string]): a dictionary with the primary key as keys and the endpoint's name as values.
+            use_requests (boolean): if True, a request post is used to query the on-line tables, otherwise the Databricks SQL connector is used.
+
+        Attributes:
+            predictors (list[string]): the list of predictors.
+        """
+        self.model = model
+        self.dtypes_map = dtypes_map
+        self.encode_maps = encode_maps
+        self.predictors = sorted(
+            [pp for sublist in dtypes_map.values() for pp in sublist]
+        )
+        self.yellow_red_threshold = yellow_red_threshold
+        self.yellow_green_threshold = yellow_green_threshold
+        self.yellow_list = yellow_list
+        self.use_requests = use_requests
+        self.databricks_host = databricks_host
+        self.token_ep = token_ep
+        self.tables_endpoints = tables_endpoints
+        self._init_url()
+
+        self.spark = spark
+
+    def _init_url(self):
+        """
+        Method to obtain the url of serving endpoints that serves the on-line tables by their name.
+        """
+        ep_dict = {}
+        for key, ep in self.tables_endpoints.items():
+            ep_dict[key] = f"{self.databricks_host}/serving-endpoints/{ep}/invocations"
+        self.tables_endpoints_url = ep_dict
+
+    def load_context(self, context: Optional[Any]) -> None:
+        """
+        Load context method has to be in the class.
+        Args:
+            context (any): context of the model (optional argument not used in this case).
+        """
+        print("load_context")
+
+    def _pre_processing(self, df_pandas: pd.DataFrame) -> pd.DataFrame:
+        """
+        Method to pre-process the user's input, hence, the input json file is transformed and reshaped into a Pandas dataframe.
+        Afterward, some fields are renamed and some other fields are created.
+        Args:
+            df_pandas (Pandas dataframe): a dataset to pre-process.
+        Returns:
+            df_pandas (Pandas dataframe): the pre-processed dataframe.
+        """
+        values_stringa = df_pandas["INPUT_JSON"].values[0]  # <class 'str'>
+        values_stringa = values_stringa.replace("\\'", "'")  # clean string
+        dict_input = json.loads(values_stringa)  # <class 'dict'>
+        assert isinstance(dict_input, dict), print(
+            "The json input not contain a string of a dictionary"
+        )
+
+        # Reshape input data for several forniture
+        dict_no_forn = {k: v for k, v in dict_input.items() if k != "Forniture"}
+        forn_list_dict = dict_input["Forniture"]
+        assert isinstance(forn_list_dict, list), print(
+            "The json input not contain a Forniture's list"
+        )
+        list_of_forn_dict = []
+        for ee in forn_list_dict:
+            assert isinstance(ee, dict), "A Forniture's element is not a dictionary"
+            ee_bis = ee.copy()
+            ee_bis.update(dict_no_forn.copy())
+            list_of_forn_dict.append(ee_bis)
+        assert len(forn_list_dict) > 0, print("Forniture list is empty")
+        df = pd.DataFrame(list_of_forn_dict)
+
+        # Fix some specific fields
+        df.rename(
+            columns={
+                "POD/PDR": "POD_PDR",
+                "SegmentoVolturante": "MACROSEGMENTO_CLIIN",
+                "CanaleAcquisizione": "ENCOD_SDF_CANLE_ATTIVAZ_ATT_CLIIN",
+                "CellulareVolturante": "TELEFONO_CLIIN",
+                "MailVolturante": "EMAIL_CLIIN",
+            },
+            inplace=True,
+        )
+        if "TELEFONO" in df.columns:
+            df["TELEFONO_CLIIN"] = df["TELEFONO_CLIIN"].str.lower()
+        else:
+            df["TELEFONO_CLIIN"] = ""
+
+        if "EMAIL" in df.columns:
+            df["EMAIL_CLIIN"] = df["EMAIL_CLIIN"].str.lower()
+        elif "PECVolturante" in df.columns:
+            df["EMAIL_CLIIN"] = df["PECVolturante"].str.lower()
+        else:
+            df["EMAIL_CLIIN"] = ""
+
+        df["MACROSEGMENTO_CLIIN"] = df["MACROSEGMENTO_CLIIN"].astype(str)
+
+        if "NomeCognome" in df.columns:
+            df["COGNOME_CLIIN"] = df["NomeCognome"].astype(str)
+            df["COGNOME_CLIIN"] = df["COGNOME_CLIIN"].apply(lambda x: x.split("|")[-1])
+            if "RagioneSociale" in df.columns:
+                ind = df["COGNOME_CLIIN"].isin(["", "nan"])
+                df.loc[ind, "COGNOME_CLIIN"] = df.loc[ind, "RagioneSociale"]
+        elif "RagioneSociale" in df.columns:
+            df["COGNOME_CLIIN"] = df["RagioneSociale"]
+        else:
+            df["COGNOME_CLIIN"] = ""
+
+        for cc in [
+            "COGNOME_CLIIN",
+            "MACROSEGMENTO_CLIIN",
+            "ENCOD_SDF_CANLE_ATTIVAZ_ATT_CLIIN",
+        ]:
+            df[cc] = df[cc].str.upper()
+
+        # The date of contract transfer is today, i.e. the date of the inference (It is important to elaborate some aging features)
+        df["DATA_VOLTURA"] = date.today()
+        df["DATA_VOLTURA"] = pd.to_datetime(df["DATA_VOLTURA"], format="%Y-%m-%d")
+
+        return df
+
+    def _retrieve_DP_inference_fields(
+        self,
+        df_inference: pd.DataFrame,
+        case: str,
+        dp_tab_path: str,
+        diz_pk: Dict[str, List[str]],
+        cols_not_used: List[str],
+    ) -> pd.DataFrame:
+        """
+        ex method _request_ep_inference_table():
+        """
+        cols_tech = [
+            "iid_RecordID",
+            "dat_startDate",
+            "dat_endDate",
+            "systemDate",
+            "runId",
+            "flg_lastSnap",
+            "des_BusinessKey",
+            "version",
+        ]
+        # print(f'---------------------------------{case}---------------------------------')
+        pk = list(diz_pk.keys())[0]
+        # print(f"{pk}: {diz_pk[pk]}")
+        query_sql = """
+            SELECT *
+            FROM {dp_tab_path}
+            LIMIT 0
+        """.format(dp_tab_path=dp_tab_path)
+        cols = self.spark.sql(query_sql).columns
+        cols = [c for c in cols if c not in cols_tech + cols_not_used]
+        ind = df_inference[pk].isin(diz_pk[pk])
+        # print(f"{ind.sum()} retrieveble records of {dp_tab_path}")
+
+        df_output = df_inference.loc[ind, cols].reset_index(drop=True)
+
+        df_output = df_output.drop_duplicates()
+        # print(f"{df_output.shape} retrieved dataframe")
+        return df_output
+
+    def _dict_map_encoder(
+        self,
+        df: pd.DataFrame,
+        col_to_encode: str,
+        new_col: str,
+        encode_map: Dict[str, Any],
+    ) -> pd.DataFrame:
+        """
+        Encodes the categories of a feature based on the coding map (encode_map) and creates a new column with the encoded values.
+        Args:
+            df (Pandas DataFrame): an input dataset.
+            col_to_encode (string): the name of the column to encode.
+            new_col (string): the name of the new column with the encoded values.
+            encode_map (dict[string, Any]): the encoding map.
+        Returns:
+            the initial dataset in Pandas DataFrame with the new encoded column.
+        """
+        col_position = df.columns.get_loc(col_to_encode)
+        df.insert(
+            col_position + 1,
+            new_col,
+            df[col_to_encode].astype(str).replace(encode_map).astype("category"),
+        )
+        return df
+
+    def _identical_fields(
+        self,
+        df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """
+        Function to elaborate the flag features for the fields with the same value between volturante and volturato cutomers.
+        Args:
+            df (Pandas DataFrame): an input dataset.
+        Returns:
+            the initial dataset in input with the new columns "FLG_COGNOME_UGUALE", "FLG_EMAIL_UGUALE", "FLG_TELEFONO_UGUALE" added.
+        """
+        l_cols = df.columns
+        cols_to_eng = ["COGNOME", "EMAIL", "TELEFONO"]
+        for col in cols_to_eng:
+            if col in l_cols:
+                df[f"FLG_{col}_UGUALE"] = (
+                    df[col].str.upper() == df[f"{col}_CLIIN"].str.upper()
+                )
+            else:
+                print(f"Missing column {col}")
+        return df
+
+    def _metering_features(
+        self,
+        df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """
+        Function to elaborate  the features of aging between meter measurement date of the last switch-in and the date of contract transfer.
+        Args:
+            df (Pandas DataFrame): an input dataset.
+        Returns:
+            the initial dataset in input with the new column "AGING_METER_ATTIV_SWIN" added.
+        """
+        try:
+            # Merge the two columns of DATA_ULT_LETTURA_ATTIV_SWINPWR and DATA_ULT_LETTURA_ATTIV_SWINGAS
+            df["DATA_ULT_LETTURA_ATTIV_SWINPWR"] = pd.to_datetime(
+                df["DATA_ULT_LETTURA_ATTIV_SWINPWR"], format="%Y-%m-%d"
+            )
+            df["DATA_ULT_LETTURA_ATTIV_SWINGAS"] = pd.to_datetime(
+                df["DATA_ULT_LETTURA_ATTIV_SWINGAS"], format="%Y-%m-%d"
+            )
+            df["DATA_ULT_LETTURA_ATTIV_SWIN"] = df[
+                "DATA_ULT_LETTURA_ATTIV_SWINPWR"
+            ].fillna(df["DATA_ULT_LETTURA_ATTIV_SWINGAS"])
+            # Convert the date columns to datetime
+            df["DATA_ULT_LETTURA_ATTIV_SWIN"] = pd.to_datetime(
+                df["DATA_ULT_LETTURA_ATTIV_SWIN"], format="%Y-%m-%d"
+            )
+            df["DATA_VOLTURA"] = pd.to_datetime(df["DATA_VOLTURA"], format="%Y-%m-%d")
+            # Calculate the difference in days
+            df["AGING_METER_ATTIV_SWIN"] = (
+                df["DATA_VOLTURA"] - df["DATA_ULT_LETTURA_ATTIV_SWIN"]
+            ).apply(lambda x: x.days)
+            df["AGING_METER_ATTIV_SWIN"] = df["AGING_METER_ATTIV_SWIN"].astype(
+                "float64"
+            )
+        except AttributeError:
+            print(
+                "Missing column DATA_ULT_LETTURA_ATTIV_SWINPWR or DATA_ULT_LETTURA_ATTIV_SWINGAS or DATA_VOLTURA"
+            )
+        return df
+
+    def _deterministic_model(self, df: pd.DataFrame) -> tuple:
+        """
+        Method to apply the Deterministic model, i.e. the deterministic logic, which checks if the POD/PDR are present in the "yellow list", if so the contract transfer has a yellow traffic light, otherwise the traffic light is green.
+        Args:
+            df (Pandas dataframe): dataset with the "POD_PDR" column.
+        Returns:
+            risk_class (string): the traffic light risk-classification of the Deterministic model.
+            score (float): the score of the Deterministic model.
+        """
+        lista_pod_pdr = df["POD_PDR"].tolist()
+        try:
+            for pod_pdr in lista_pod_pdr:
+                if pod_pdr in self.yellow_list:
+                    risk_class = "Semaforo Giallo"
+                    score = 1
+                    break
+                else:
+                    risk_class = "Semaforo Verde"
+                    score = 0
+
+        except Exception as e:
+            risk_class = "Non Disponibile"
+            score = None
+            print(
+                f"ERROR IN THE DETERMINISTIC MODEL WITH THE YELLOW LIST OF POD/PDR{str(lista_pod_pdr)}. Error: {e}"
+            )
+
+        return risk_class, score
+
+    def _scoring_model(self, df: pd.DataFrame, df_DP: pd.DataFrame) -> tuple:
+        """
+        Method to apply the Scoring model, which performs the prediction, but first it must perform some preliminary processing:
+         - extract the predictors from the on-line tables with "query-request-post" to the relative endpoints,
+         - join the different dataframes obtained,
+         - filter the cases that have an unpaid credit,
+         - perform the features engineering and transform the datatypes.
+
+        Args:
+            df (Pandas dataframe): the pre-processed dataframe.
+        Returns:
+            risk_class (string): the traffic light risk-classification of the Scoring model.
+            score (float): the score of the Scoring model.
+        """
+
+        # INFERENCE MASTER EXTRACTION
+        try:
+            # Primary keys
+            # POD e/o PDR
+            keys_pod_pdr = [
+                {"POD_PDR": kk} for kk in df["POD_PDR"].tolist() if kk != ""
+            ]
+            # CODICE FISCALE o PARTITA IVA
+            col_cf_piva = [
+                cc for cc in ["CodiceFiscale", "PartitaIva"] if cc in df.columns
+            ]
+            keys_cf_piva = [
+                {"COD_FISCALE_PIVA_CLIIN": kk}
+                for kk in df[col_cf_piva].values.tolist()[0]
+                if kk != ""
+            ]
+            if len(keys_cf_piva) == 2:
+                df["CF_PIVA_INPUT"] = df["CodiceFiscale"].fillna(df["PartitaIva"])
+            else:
+                df["CF_PIVA_INPUT"] = df[col_cf_piva[0]]
+            ind = df["CF_PIVA_INPUT"] == ""
+            if (sum(ind) > 0) & (len(keys_cf_piva) > 1):
+                df.loc[ind, "CF_PIVA_INPUT"] = df.loc[ind, col_cf_piva[-1]]
+        except Exception as e:
+            error = f"ERROR IN THE EXTRACTION OF PRIMARY KEYS: {e}"
+            print(error)
+
+        # Retrieve DP fields
+        # ex _request_ep_inference_table
+        dfmi_volturato_pod_pdr = self._retrieve_DP_inference_fields(
+            df_inference=df_DP,
+            case="CLIOUT",
+            dp_tab_path="p_dpp_core_ai.ccvol.ccvol_infer_mstr_volturato",
+            diz_pk={"POD_PDR": [kk["POD_PDR"] for kk in keys_pod_pdr]},
+            cols_not_used=[
+                "FK_ACCOUNT",
+                "COD_PDF",
+                "FLG_MOROSITA_FORN",
+                "FK_CONTO_FATT",
+                "FK_QUOTE_PROPOSAL",
+                "SDF_CANLE_ATTIVAZ_ATT",
+                "CLI_AGE",
+                "CLI_NAZ",
+                "MACROSEGMENTO",
+                "NOME",
+                "RAG_SOCIALE",
+                "FORMA_GIURIDICA",
+                "PEC",
+            ],
+        )
+        message = f'The request to inference table endpoint "{str(self.tables_endpoints_url["POD_PDR"])}" is completed. Its output is: {str(dfmi_volturato_pod_pdr.shape)}.'
+        logger.info(message)
+        # ex _request_ep_inference_table
+        dfmi_volturante_cf_piva = self._retrieve_DP_inference_fields(
+            df_inference=df_DP,
+            case="CLIIN",
+            dp_tab_path="p_dpp_core_ai.ccvol.ccvol_infer_mstr_volturante",
+            diz_pk={
+                "COD_FISCALE_PIVA_CLIIN": [
+                    kk["COD_FISCALE_PIVA_CLIIN"] for kk in keys_cf_piva
+                ]
+            },
+            cols_not_used=["CLI_DATA_SCAD_RATA_OLDER_CLIIN"],
+        )
+        message = f'The request to inference table endpoint "{str(self.tables_endpoints_url["COD_FISCALE_PIVA_CLIIN"])}" is completed. Its output is: {str(dfmi_volturante_cf_piva.shape)}.'
+        logger.info(message)
+
+        # Joins
+        try:
+            df_master_inference = df.merge(
+                dfmi_volturato_pod_pdr,
+                left_on="POD_PDR",
+                right_on="POD_PDR",
+                how="left",
+            )
+            df_master_inference = df_master_inference.merge(
+                dfmi_volturante_cf_piva,
+                left_on="CF_PIVA_INPUT",
+                right_on="COD_FISCALE_PIVA_CLIIN",
+                how="left",
+            )
+        except Exception as e:
+            print(f"ERROR IN THE JOINS OF DATAFRAMES. Error: {e}")
+
+        # FILTERING OF CASES WITH PREVIOUS UNPAID CREDIT
+        ind_insoluto = (
+            (df_master_inference["PDF_INSOLUTO_LORDO_ALL"] > 0)
+            | (df_master_inference["PDF_INSOLUTO_LORDO_LAST"] > 0)
+            | (df_master_inference["CLI_INSOLUTO_LORDO"] > 0)
+            | (df_master_inference["CLI_INSOLUTO_LORDO_CLIIN"] > 0)
+        )
+
+        if sum(ind_insoluto) > 0:
+            df_master_inference = df_master_inference.loc[ind_insoluto, :].copy()
+            try:
+                # FEATURES ENGINEERING
+                # Encoding categorical column
+                # "SDF_CANLE_ATTIVAZ_ATT_CLIIN" is already encoded
+                col = "MACROSEGMENTO_CLIIN"  # i.e. SegmentoVolturante
+                emap = self.encode_maps[col]
+                df_master_inference = self._dict_map_encoder(
+                    df=df_master_inference,
+                    col_to_encode=col,
+                    new_col=f"ENCOD_{col}",
+                    encode_map=emap,
+                )
+                df_master_inference = self._identical_fields(df_master_inference)
+                df_master_inference = self._metering_features(df_master_inference)
+
+                # CAST PANDAS DATATYPES
+                for dtype, col_list in self.dtypes_map.items():
+                    df_master_inference[col_list] = df_master_inference[
+                        col_list
+                    ].astype(dtype)
+            except Exception as e:
+                print(
+                    f"ERROR IN THE FEATURES ENGINEERING WITH THE DATAFRAME: \n {str(df_master_inference.info())}.\n Error: {e}"
+                )
+
+            # MODEL'S PREDICTIONS
+            try:
+                predict_probas = self.model.predict_proba(
+                    df_master_inference[self.predictors]
+                )
+                df_proba = (
+                    pd.DataFrame(predict_probas)
+                    .rename(
+                        columns={
+                            0: "PROBA_0",
+                            1: "PROBA_1",  # i.e. the score
+                        }
+                    )
+                    .reset_index(drop=True)
+                )
+                score = round(df_proba["PROBA_1"].max(), 2)
+            except Exception as e:
+                print(
+                    f"ERROR IN THE PREDICTION OF SCORING MODEL WITH THE DATAFRAME {str(df_master_inference[self.predictors].shape)}. Error: {e}"
+                )
+
+            # Categorization of the score into a color-level risk
+            if score == 1:
+                score = 0.99  # per poter distinguere tale output dal quello del modello deterministico
+                risk_class = "Semaforo Rosso"
+            elif score > self.yellow_red_threshold:
+                risk_class = "Semaforo Rosso"
+            elif score > self.yellow_green_threshold:
+                risk_class = "Semaforo Giallo"
+            elif score > 0:
+                risk_class = "Semaforo Verde"
+            elif score == 0:
+                score = 0.01  # per poter distinguere tale output dal quello del modello deterministico
+                risk_class = "Semaforo Verde"
+            else:
+                risk_class = "Non Disponibile"
+                score = None
+
+        else:
+            # if there is no previous unpaid credit, then the transfers are not considered at risk of fraudulent default
+            risk_class = "Semaforo Verde"
+            score = -1
+
+        return risk_class, score
+
+    def predict(
+        self,
+        context: Optional[Any] = None,
+        user_input: pd.DataFrame = None,
+        df_DP: pd.DataFrame = None,
+    ) -> Dict[str, Any]:
+        """Method to prepare data, do the inference predition and its post-processing.
+        It applies a try-except logic because if the model fails, then the Deterministic model will be applied.
+        In addition, an A/B test logic is applied instead of using the Scoring model directly. This is a temporary solution that will be removed in the future.
+        The A/B test logic is explained as follows:
+        - if the number contained in the "POD_PDR" code is even, then the scoring model will be applied;
+        - if the number contained in the "POD_PDR" code is odd, then the deterministic model will be applied;
+        - otherwise a service unavailability result is returned.
+        Tips
+        In order to be able to recognize which model has actually been applied in each use of the service, in the output results, which are tracked and stored in a table, the score value also has a hidden meaning:
+        - the Deterministic model always returns one of the two integer values ​​"0" or "1" as the result score;
+        - the Scoring model returns any decimal numeric value between "0" and "1", but is forced to never return the extreme integer values;
+        - in the special case where the Scoring model should be applied, but in reality the unpaid credit flag filter avoids its application, then the score is returned with the negative value "-1".
+
+        Args:
+            context (any): context of the model (optional argument not used in this case).
+            user_input (Pandas dataframe): user's input.
+        Returns:
+            dict_esito (dictionary[string, any]): dictionary with the output of the model's prediction:
+             - risk_class (string): the traffic light risk-classification prediction.
+             - score (float): the score of prediction.
+        """
+        # DATA PREPARATION
+        try:
+            df_user_input = self._pre_processing(df_pandas=user_input)
+        except Exception as e:
+            print(
+                f"ERROR IN THE DATA PREPARATION WITH THE INPUT: \n {str(user_input)} .\n Error: {e}"
+            )
+
+        # TRY SCORING MODEL OTHERWISE USE DETERMINISTIC MODEL AS ROLLBACK
+        try:
+            # CASE SEPARATION FOR A/B TEST
+            sum_podpdr_num = 0
+            for pod_pdr in df_user_input["POD_PDR"].tolist():
+                cleaned_number = re.sub(r"\D", "", str(pod_pdr))
+                int_number = int(cleaned_number) if cleaned_number != "" else None
+                sum_podpdr_num = sum_podpdr_num + int_number
+
+            if sum_podpdr_num % 2 == 0:  # even
+                # SCORING MODEL
+                risk_class, score = self._scoring_model(df=df_user_input, df_DP=df_DP)
+
+            elif sum_podpdr_num % 2 == 1:  # odd
+                # DETERMINISTIC MODEL
+                risk_class, score = self._deterministic_model(df=df_user_input)
+            else:
+                risk_class = "Non Disponibile"
+                score = None
+                print("The number of POD_PDR is not even or odd")
+
+        except Exception as e:
+            # DETERMINISTIC MODEL
+            risk_class, score = self._deterministic_model(df=df_user_input)
+            print(
+                f"ERROR IN THE SCORING MODEL, SO THE DETERMINISTIC MODEL IS USED. Error: {e}"
+            )
+        dict_esito = {"esitoSemaforico": risk_class, "score": score}
+        return dict_esito

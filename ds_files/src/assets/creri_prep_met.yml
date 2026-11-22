@@ -1,0 +1,104 @@
+resources:
+  jobs:
+    creri_metrics_materialization:
+      name: ${bundle.target}_${bundle.name}_metrics_materialization
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Pipeline di materializzazione dei dati delle metriche"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_as_sp}
+      max_concurrent_runs: 6
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_standard_cluster}
+        - job_cluster_key: creri_job_cluster_log
+          new_cluster: ${var.ai_logging_cluster}
+      permissions: ${var.my_permissions}
+      # email_notifications: ${var.my_email_notifications}
+      queue:
+        enabled: true
+
+      parameters:
+        - name: cod_layerName
+          default: PREP_METRICS
+        - name: cod_pipelineID
+          default: "{{job.id}}"
+        - name: cod_workflowName
+          default: "{{job.name}}"
+        - name: input_params
+          default: "{'name': 'MetricaSdfAttivazioneAttivi',  'type':
+            'METRICS',  'certified': True,  'src':
+            'metrics.sito_di_fornitura',  'table':
+            'sbx_catalog.data.ih_MetricaSdfAttivazioneAttivi',  'keys':
+            ['PK_ACCOUNT', 'PK_CONTO_FATT', 'PK_PDF']}"
+        - name: RunId
+          default: "{{job.run_id}}"
+        - name: snapshot_date
+          default: 2024-01-01
+        - name: cod_productName
+          default: "${bundle.name}"
+
+      tasks:
+
+        - task_key: METRICS_logging_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/METRICS/METRICS_Logging_start
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+          libraries:
+            - whl: /Workspace/Shared/Libraries/metrics-${var.metrics_version}-py3-none-any.whl
+          max_retries: 3
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+        - task_key: METRICS
+          depends_on:
+            - task_key: METRICS_logging_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/01_MetricsMaterialization
+            base_parameters:
+              dat_startDate: "{{job.start_time.iso_datetime}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - whl: /Workspace/Shared/Libraries/metrics-${var.metrics_version}-py3-none-any.whl
+          max_retries: 3
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+        - task_key: METRICS_logging_error
+          depends_on:
+            - task_key: METRICS
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/METRICS/METRICS_Logging_error
+            base_parameters:
+              result_state: "{{tasks.METRICS.result_state}}"
+              error_code: "{{tasks.METRICS.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+          max_retries: 2
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+        - task_key: METRICS_logging_success
+          depends_on:
+            - task_key: METRICS
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/METRICS/METRICS_Logging_success
+            base_parameters:
+              dat_startDate: "{{job.start_time.iso_datetime}}"
+              result_state: "{{tasks.METRICS.result_state}}"
+              error_code: "{{tasks.METRICS.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+          max_retries: 2
+          min_retry_interval_millis: 30000
+          retry_on_timeout: true
+
+      # schedule:  # NO SCHEDULE REQUIRED, IT IS TRIGGERED BY THE ORCHESTRATOR JOB
+      #   quartz_cron_expression: "0 0 4 1 * ? *" # 1st day of the month at 04:00:00
+      #   timezone_id: Europe/Amsterdam #  Amsterdam, Berlin, Bern, Rome, Stockholm
+      #   pause_status: PAUSED

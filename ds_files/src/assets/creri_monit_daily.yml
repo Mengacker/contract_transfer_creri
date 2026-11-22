@@ -1,0 +1,123 @@
+# Workflow definition
+resources:
+  jobs:
+    creri_monit_daily_job:
+      name: ${bundle.target}_${bundle.name}_monit_daily # name in dbx UI
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Pipeline utile per riportare evidenze in merito i risultati del modello"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_as_sp}
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_standard_cluster}
+        - job_cluster_key: creri_job_cluster_log
+          new_cluster: ${var.ai_logging_cluster}
+      permissions: ${var.my_permissions}
+      email_notifications: ${var.my_email_notifications_daily}
+      queue:
+        enabled: true
+      parameters:
+        - name: env
+          default: ${bundle.target}
+        - name: is_cicd
+          default: "true"
+        - name: cod_flowName
+          default: MONIT
+        - name: cod_layerName
+          default: WORKFLOW
+        - name: experiment_path
+          default: ${var.experiment_path}
+        - name: snapshot_date
+          default: "{{job.trigger.time.[iso_date]}}"
+        - name: cod_pipelineID
+          default: "{{job.id}}"
+        - name: cod_productName
+          default: ${bundle.name}
+        - name: cod_workflowName
+          default: "{{job.name}}"
+        - name: RunId
+          default: "{{job.run_id}}"
+
+      # Task definition
+      tasks:
+        - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_start_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+        # - task_key: MonitorCreationResultsTable
+        #   depends_on:
+        #     - task_key: LOGGING_start
+        #   notebook_task:
+        #     notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/08_MonitorCreationResultsTable
+        #     source: WORKSPACE
+        #   job_cluster_key: creri_job_cluster
+        #   libraries:
+        #     - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+        #     - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+
+        - task_key: MonitorCheckRequestBug
+          depends_on:
+            # - task_key: MonitorCreationResultsTable
+            - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/08_MonitorCheckRequestBug
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+
+        - task_key: MonitorCheckDataDrifts
+          depends_on:
+            # - task_key: MonitorCreationResultsTable
+            - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/08_MonitorCheckDataDrifts
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+
+        - task_key: LOGGING_error_MonitorCheckRequestBug
+          depends_on:
+            - task_key: MonitorCheckRequestBug
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_error_flow
+            base_parameters:
+              State: "{{tasks.MonitorCheckRequestBug.result_state}}"
+              Error: "{{tasks.MonitorCheckRequestBug.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+        - task_key: LOGGING_error_MonitorCheckDataDrifts
+          depends_on:
+            - task_key: MonitorCheckDataDrifts
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_error_flow
+            base_parameters:
+              State: "{{tasks.MonitorCheckDataDrifts.result_state}}"
+              Error: "{{tasks.MonitorCheckDataDrifts.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+        - task_key: LOGGING_end
+          depends_on:
+            - task_key: MonitorCheckRequestBug
+            - task_key: MonitorCheckDataDrifts
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_end_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+      schedule:
+        quartz_cron_expression: "0 0 1 * * ? *" # daily at 01:00:00 am
+        timezone_id: Europe/Amsterdam #  Amsterdam, Berlin, Bern, Rome, Stockholm
+        pause_status: PAUSED

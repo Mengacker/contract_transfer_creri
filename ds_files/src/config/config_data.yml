@@ -1,0 +1,374 @@
+# ---------------------------------------------------------------------------- #
+#                     Configuration of data informations:                      #
+#               inputs predictors targets and others field label,              #
+#              engineered features, columns list not for prediction,           #
+#         Pandas and Pyspark datatypes, expected values, encoding maps         #
+# ---------------------------------------------------------------------------- #
+
+input_file:
+  "INPUT_JSON": {"pandas_type":"string","pyspark_type":"string","values":"json"}
+
+
+input_data: {
+    "SegmentoVolturante": {
+        "pandas_type": "string",
+        "pyspark_type": "string",
+        "values": ["Residenziale", "Residenziali", "Microbusiness"],
+        "encoding": {
+            "RESIDENZIALI": "RES",
+            "RESIDENZIALE": "RES",
+            "MICROBUSINESS": "BIZ",
+            "IMPRESE": "BIZ",
+            "IMPRESA": "BIZ",
+            "CONDOMINIO": "COND",
+            "CONDOMINI": "COND",
+            "PUBBLICA AMMINISTRAZIONE": "PA",
+            "": ""
+        }
+    }, # "100000000"="Residenziale","100000001"="Microbusiness"
+    "CodiceFiscale": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "PartitaIva": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "NomeCognome": {"pandas_type": "string", "pyspark_type": "string", "values": "string_name|string_surname"},
+    "RagioneSociale": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "FormaGiuridica": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "TipoControlloCreditizio": {"pandas_type": "string", "pyspark_type": "string", "values": ["Modello Antifrode Voltura", "modello voltura"]},
+    "CanaleAcquisizione": {
+        "pandas_type": "string",
+        "pyspark_type": "string",
+        "values": ["WEB", "WPU", "WAS", "CWE", "FLA", "TLI", "TLO", "EXC", "ESE", "AGE", "AGM", "DEA", ""],
+        "decoding": {
+            "WEB": "WEB PULL",
+            "WPU": "WEB PUSH",
+            "WAS": "WEB ASSISTITO",
+            "CWE": "COMPARATORE WEB",
+            "FLA": "ENILIVE",
+            "TLI": "TLS INBOUND",
+            "TLO": "TLS OUTBOUND",
+            "EXC": "EXTRA CARE",
+            "ESE": "SHOP ESE",
+            "AGE": "AGENZIE",
+            "AGM": "AGENZIE MICROBUSINESS",
+            "DEA": "SHOP DEALER",
+            "": "Z_NOPLICO"
+        }
+    },
+    "CodiceAgenzia": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},  # "AGWEBAPP","COAS7998" o molti altri
+    "ModalitaPagamentoVolturante": {"pandas_type": "string", "pyspark_type": "string", "values": ["Domiciliazione bancaria", "Addebito su Conto Corrente", "Bollettino Postale"]},
+    "MailVolturante": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "PECVolturante": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "CellulareVolturante": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "ClienteVolturante": {"pandas_type": "string", "pyspark_type": "string", "values": ["100000000", "100000001", "00"]}, # "0" per non censito, o "100000000" per customer base, "100000001" per ex cliente, "00" per ??
+    "ModalitaOperativa": {"pandas_type": "string", "pyspark_type": "string", "values": ["Voltura"]},
+    "Forniture": [{
+        "Commodity": {"pandas_type": "string", "pyspark_type": "string", "values": ["GAS", "POWER", "PWR"]},
+        "POD/PDR": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+        "ProductType": {"pandas_type": "string", "pyspark_type": "string", "values": ["Prodotto Commodity Gas", "Prodotto Commodity Luce"]},
+        "ProductFamily": {"pandas_type": "string", "pyspark_type": "string", "values": ["Commodity"]}
+    }],
+    "FlagVulnerabilityVolturante": {"pandas_type": "string", "pyspark_type": "string", "values": "string"},
+    "ResidenteNonResidente": {"pandas_type": "string", "pyspark_type": "string", "values": ["Domestico non Residente", "Domestico non residente", "Altri Usi", ""]},
+    "FasciaOraria": {"pandas_type": "string", "pyspark_type": "string", "values": ["Monoraria", "Bioraria", "Trioraria", ""]}
+}
+
+target_features:
+  training: {
+      # "PK_CONTO_FATT":{"values":"primary_key"}, # chiave primara della classe "TargetContoFattClientiMorosi"
+      "FLG_CLI_MOROSO": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False]}, # target label to predict
+      "PERC_MANCATI_INCASSI_RATE": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"max":1}}, # target feature per valutazione performance testset
+      "FATTURATO_RATE": {"pandas_type":"float64","pyspark_type":"float","values":{}}, # target feature per valutazione performance testset
+      "MANCATI_INCASSI_RATE": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0}}, # target feature per valutazione performance testset
+      "IMPORTI_INCASSATI": {"pandas_type":"float64","pyspark_type":"float","values":{}}, # target feature per valutazione performance testset
+      # "FLG_VOLT_KO":"int64", # target del caso delle volture rifiutate (non più sviluppato)
+    }
+  serving: {
+            "esitoSemaforico": {"pandas_type":"string","pyspark_type":"string","values":["Semaforo Verde", "Semaforo Giallo","Semaforo Rosso","Non Disponibile"]},
+            "score": {"pandas_type":"float64","pyspark_type":"float","values":{"min":-1,"max":1}},
+            }
+
+random_state: 42
+
+input_features: {
+    "CustomBase": {
+        # "PK_PROPOSAL_LINE_ITEM": {"values":"primary_key"}, # chiave primaria delle 2 CB volturante e volturato e della CB finale
+        "POD_PDR": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        # "COD_POD": {"values":"not_used"},
+        # "COD_PDR": {"values":"not_used"},
+        "COD_FISCALE_PIVA": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        # "COD_FISCALE": {"values":"not_used"},
+        # "PIVA": {"values":"not_used"},
+        "MACROSEGMENTO": {
+          "pandas_type": "category",
+          "pyspark_type": "string",
+          "values": ["RESIDENZIALI", "RESIDENZIALE","MICROBUSINESS","IMPRESE","IMPRESA","CONDOMINIO","CONDOMINI","PUBBLICA AMMINISTRAZIONE",""],
+          "encoding": {
+            "RESIDENZIALI": "RES",
+            "RESIDENZIALE": "RES",
+            "MICROBUSINESS": "BIZ",
+            "IMPRESE": "BIZ",
+            "IMPRESA": "BIZ",
+            "CONDOMINIO": "COND",
+            "CONDOMINI": "COND",
+            "PUBBLICA AMMINISTRAZIONE": "PA",
+            "": ""
+            },
+        },
+        "MACROSEGMENTO_CLIIN": {
+          "pandas_type": "category",
+          "pyspark_type": "string",
+          "values": ["RESIDENZIALI", "RESIDENZIALE","MICROBUSINESS","IMPRESE","IMPRESA","CONDOMINIO","CONDOMINI","PUBBLICA AMMINISTRAZIONE",""],
+          "encoding": {
+            "RESIDENZIALI": "RES",
+            "RESIDENZIALE": "RES",
+            "MICROBUSINESS": "BIZ",
+            "IMPRESE": "BIZ",
+            "IMPRESA": "BIZ",
+            "CONDOMINIO": "COND",
+            "CONDOMINI": "COND",
+            "PUBBLICA AMMINISTRAZIONE": "PA",
+            "": ""
+            },
+        },
+        "COGNOME": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        "COGNOME_CLIIN": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        # "NOME": {"values":"not_used"},
+        # "RAG_SOCIALE": {"values":"not_used"},
+        # "FORMA_GIURIDICA": {"values":"not_used"},
+        "TELEFONO": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        "TELEFONO_CLIIN": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        "EMAIL": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        "EMAIL_CLIIN": {"pandas_type":"string","pyspark_type":"string","values":"string"},
+        # "PEC": {"values":"not_used"},
+        "DATA_VOLTURA": {"pandas_type":"date","pyspark_type":"date","values":"yyyy-mm-dd"},
+        "DATA_FIRMA_VOLTURA": {"pandas_type":"date","pyspark_type":"date","values":"yyyy-mm-dd"},
+        #
+        # ---------------------------- Field by the MetricaPdfPodPdrGtwV:
+        # "PK_PDF": {"values":"primary_key"},  # chiave primaria (ex COD_PDF)
+        # "IND_FORN_IND": {"values":"not_used"},  # Indirizzo di fornitura
+        "IND_FORN_CAP": {"pandas_type":"category","pyspark_type":"string","values":"string"},  # Cap  di fornitura
+        "IND_FORN_COMUNE": {"pandas_type":"category","pyspark_type":"string","values":"string"},  # Comune di fornitura
+        "IND_FORN_COD_PROV": {"pandas_type":"category","pyspark_type":"string","values":["","EE","LT", "RG", "PC", "FI", "PU", "RO", "PI", "PZ", "BS", "MN", "FC", "RE", "RA", "TV", "PD", "CN", "FG", "AT", "AV", "NA", "GO", "LI", "SV", "CZ", "VA", None, "PT", "SO", "PG", "RI", "BN", "MI", "TO", "CL", "VR", "TP", "SA", "BL", "CT", "MT", "BR", "VT", "EN", "SP", "MO", "VI", "PV", "PO", "RC", "VE", "ME", "TR", "MB", "VB", "CR", "KR", "AQ", "TS", "MS", "UD", "AL", "PN", "LC", "FR", "CH", "TN", "GR", "PA", "AG", "MC", "BA", "FE", "TE", "BG", "GE", "LO", "FM", "PE", "LE", "BZ", "BI", "CS", "CE", "VC", "RN", "VV", "CB", "BT", "SI", "AN", "NO", "BO", "CO", "IM", "AR", "RM", "PR", "LU", "AP", "TA", "IS", "SR", "AO", "OR", "SU", "CA", "NU", "SS", "OG", "CI", "OT", "VS"]},  # Codice della Provincia di fornitura
+        # "IND_FORN_NOME_PROV": {"values":"not_used"},  # Nome della provincia di fornitura
+        "IND_FORN_REGIONE": {"pandas_type":"category","pyspark_type":"string","values":["","VENETO", "ABRUZZO", "LOMBARDIA", "EMILIA ROMAGNA", "MOLISE", "CAMPANIA", "TRENTINO ALTO ADIGE", "LAZIO", "LIGURIA", "FRIULI VENEZIA GIULIA", "UMBRIA", "PUGLIA", "PIEMONTE", "MARCHE", "TOSCANA", "VALLE D AOSTA", "BASILICATA", "CALABRIA", "SICILIA", "SARDEGNA"]},  # Regione  di fornitura
+        #
+        # ---------------------------- Field by the MetricaPdfPodPdrGtwV -------------> CLIIN: Cliente Volturante
+        # "PK_PDF": {"values":"primary_key"},  # chiave primaria (ex COD_PDF)
+        # "IND_FORN_IND_CLIIN": {"values":"not_used"},  # Indirizzo di fornitura
+        "IND_FORN_CAP_CLIIN": {"pandas_type":"category","pyspark_type":"string","values":"string"},  # Cap  di fornitura
+        "IND_FORN_COMUNE_CLIIN": {"pandas_type":"category","pyspark_type":"string","values":"string"},  # Comune di fornitura
+        "IND_FORN_COD_PROV_CLIIN": {"pandas_type":"category","pyspark_type":"string","values":["","EE","LT", "RG", "PC", "FI", "PU", "RO", "PI", "PZ", "BS", "MN", "FC", "RE", "RA", "TV", "PD", "CN", "FG", "AT", "AV", "NA", "GO", "LI", "SV", "CZ", "VA", None, "PT", "SO", "PG", "RI", "BN", "MI", "TO", "CL", "VR", "TP", "SA", "BL", "CT", "MT", "BR", "VT", "EN", "SP", "MO", "VI", "PV", "PO", "RC", "VE", "ME", "TR", "MB", "VB", "CR", "KR", "AQ", "TS", "MS", "UD", "AL", "PN", "LC", "FR", "CH", "TN", "GR", "PA", "AG", "MC", "BA", "FE", "TE", "BG", "GE", "LO", "FM", "PE", "LE", "BZ", "BI", "CS", "CE", "VC", "RN", "VV", "CB", "BT", "SI", "AN", "NO", "BO", "CO", "IM", "AR", "RM", "PR", "LU", "AP", "TA", "IS", "SR", "AO", "OR", "SU", "CA", "NU", "SS", "OG", "CI", "OT", "VS"]},  # Codice della Provincia di fornitura
+        # "IND_FORN_NOME_PROV_CLIIN": {"values":"not_used"},  # Nome della provincia di fornitura
+        "IND_FORN_REGIONE_CLIIN": {"pandas_type":"category","pyspark_type":"string","values":["VENETO", "ABRUZZO", "LOMBARDIA", "EMILIA ROMAGNA", "MOLISE", "CAMPANIA", "TRENTINO ALTO ADIGE", "LAZIO", "LIGURIA", "FRIULI VENEZIA GIULIA", "UMBRIA", "PUGLIA", "PIEMONTE", "MARCHE", "TOSCANA", "VALLE D AOSTA", "BASILICATA", "CALABRIA", "SICILIA", "SARDEGNA"]},  # Regione  di fornitura
+      },
+
+    "MetricaClienteAttributi": {
+        # "PK_ACCOUNT": {"values":"primary_key"}, # chiave primaria
+        # "CLI_CONT_ORIG": {"values":"not_used"},
+        # "CLI_MACTO": {"values":"not_used"},     # Macrosegmento del cliente
+        # "CLI_PROV_NASC": {"values":"not_used"}, # Provincia di nascita del cliente
+        "CLI_PROV": {"pandas_type":"category","pyspark_type":"string","values":["","EE","LT", "RG", "PC", "FI", "PU", "RO", "PI", "PZ", "BS", "MN", "FC", "RE", "RA", "TV", "PD", "CN", "FG", "AT", "AV", "NA", "GO", "LI", "SV", "CZ", "VA", None, "PT", "SO", "PG", "RI", "BN", "MI", "TO", "CL", "VR", "TP", "SA", "BL", "CT", "MT", "BR", "VT", "EN", "SP", "MO", "VI", "PV", "PO", "RC", "VE", "ME", "TR", "MB", "VB", "CR", "KR", "AQ", "TS", "MS", "UD", "AL", "PN", "LC", "FR", "CH", "TN", "GR", "PA", "AG", "MC", "BA", "FE", "TE", "BG", "GE", "LO", "FM", "PE", "LE", "BZ", "BI", "CS", "CE", "VC", "RN", "VV", "CB", "BT", "SI", "AN", "NO", "BO", "CO", "IM", "AR", "RM", "PR", "LU", "AP", "TA", "IS", "SR", "AO", "OR", "SU", "CA", "NU", "SS", "OG", "CI", "OT", "VS"]},  # Provincia di residenza del cliente
+        "CLI_COM": {"pandas_type":"category","pyspark_type":"string","values":"string"},  # Comune di residenza del cliente
+        # "CLI_NAZTA": {"values":"not_used"},  # Nazionalità del cliente
+        # "CLI_SEX": {"values":"not_used"},    # Sesso del cliente
+        "CLI_REG": {"pandas_type":"category","pyspark_type":"string","values":["","VENETO", "ABRUZZO", "LOMBARDIA", "EMILIA ROMAGNA", "MOLISE", "CAMPANIA", "TRENTINO ALTO ADIGE", "LAZIO", "LIGURIA", "FRIULI VENEZIA GIULIA", "UMBRIA", "PUGLIA", "PIEMONTE", "MARCHE", "TOSCANA", "VALLE D AOSTA", "BASILICATA", "CALABRIA", "SICILIA", "SARDEGNA"]},  # Regione di residenza del cliente
+        "CLI_NAZ": {"pandas_type":"string","pyspark_type":"string","values":["ITALIA"]},  # Nazione di residenza del cliente
+        "CLI_AGE": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"max":120}}, # Età del cliente espressa in anni, arrotondata all'intero successivo
+        # "CLI_FLG_REG_PORT": {"values":"not_used"},
+        # "CLI_FLG_OPZ_VERDE": {"values":"not_used"},
+        # "SOURCE_CRM": {"values":"not_used"},
+      },
+    "MetricaSdfAttivazioneAttivi": { # metrica che sarà da sostituire con la MetricaSdfAttivazione
+        # "PK_ACCOUNT": {"values":"primary_key"}, # tripletta chiave del sito di fornitura
+        # "PK_CONTO_FATT": {"values":"primary_key"}, # tripletta chiave del sito di fornitura
+        # "PK_PDF": {"values":"primary_key"}, # tripletta chiave del sito di fornitura
+        # "FK_QUOTE_PROPOSAL": {"values":"not_used"},
+        # "DATA_ATT_SITO_ATT": {"values":"not_used"},
+        # "SDF_AGING_GG_ATT": {"values":"not_used"},
+        # "SDF_AGING_MM_ATT": {"values":"not_used"},
+        # "CLI_AGING_GG_ATT": {"values":"not_used"},
+        # "CLI_AGING_MM_ATT": {"values":"not_used"},
+        "SDF_CANLE_ATTIVAZ_ATT_CLIIN": {"pandas_type":"category","pyspark_type":"string","values":["WEB ASSISTITO", "WEB PUSH", "WEB PULL", "COMPARATORE WEB", "TLS INBOUND", "TLS OUTBOUND", "ENILIVE", "SHOP DEALER", "SHOP ESE", "EXTRA CARE", "AGENZIE", "Z_NOPLICO"],"encoding":{"WEB PULL":"WEB", "WEB PUSH":"WPU", "WEB ASSISTITO":"WAS", "COMPARATORE WEB":"CWE", "ENILIVE":"FLA", "TLS INBOUND":"TLI", "TLS OUTBOUND":"TLO", "EXTRA CARE":"EXC", "SHOP ESE":"ESE","AGENZIE":"AGE", "AGENZIE MICROBUSINESS":"AGM","SHOP DEALER":"DEA", "Z_NOPLICO":""}} # ENILIVE potrebbe cambiare codifica in futuro, WEB PULL è il PORTALE WEB, WEB PUSH non è più attivo, TLS significa TELESELLING, FLA significa FLAGSHIP, AGENZIE e AGENZIE MICROBUSINESS potrebbero avere altre denominazioni ma le codifiche dovrebbero essere solo AGE e AGM.
+      },
+
+    "MetricheMorositaPregressaPodPdr": {
+        # "POD_PDR": {"values":"primary_key"},  # chiave primaria
+        "FLG_MOROSITA_FORN": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""]},
+        # "PDF_MACTO": {"values":"not_used"},
+        "PDF_STATO_CONTO_CRM_LAST": {"pandas_type":"category","pyspark_type":"string","values":["Attivo","Inattivo",""]},
+        # "PDF_DATA_SCAD_RATA_LAST": {"values":"not_used"},
+        "PDF_AGING_SCAD_RATE_LAST": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_NR_FATTURE_INSOLUTE_LAST": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_NR_RATE_INSOLUTE_LAST": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_LORDO_LAST": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_NETTO_LAST": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_CANONE_TV_LAST": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_R_LAST": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_NR_FORN_MOROSE_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        # "PDF_DATA_SCAD_RATA_ALL": {"values":"not_used"},
+        "PDF_AGING_SCAD_RATE_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_NR_FATTURE_INSOLUTE_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_NR_RATE_INSOLUTE_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_LORDO_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_NETTO_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_CANONE_TV_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_R_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_6_MM_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_1_ANNI_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_2_ANNI_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_3_ANNI_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_5_ANNI_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "PDF_INSOLUTO_PIU_ANNI_ALL": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+      },
+
+    "MetricheMorositaPregressaCliente": {
+        # "COD_FISCALE_PIVA": {"values":"primary_key"},  # chiave primaria
+        "CLI_NR_CC_FORN_MOROSE": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        # "CLI_DATA_SCAD_RATA_OLDER": {"values":"not_used"},
+        "CLI_AGING_SCAD_RATE_OLDER": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_NR_FATTURE_INSOLUTE": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_NR_RATE_INSOLUTE": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_LORDO": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_NETTO": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_CANONE_TV": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_NETTO_R": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_6_MM": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_1_ANNI": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_2_ANNI": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_3_ANNI": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_5_ANNI": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_PIU_ANNI": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+      },
+    "MetricheMorositaPregressaCliente_CLIIN": { #----------------------------------------- campi rinominati nella master
+        # "COD_FISCALE_PIVA_CLIIN": {"values":"primary_key"},  # chiave primaria
+        "CLI_NR_CC_FORN_MOROSE_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        # "CLI_DATA_SCAD_RATA_OLDER_CLIIN": {"values":"not_used"},
+        "CLI_AGING_SCAD_RATE_OLDER_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_NR_FATTURE_INSOLUTE_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_NR_RATE_INSOLUTE_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_LORDO_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_NETTO_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_CANONE_TV_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_NETTO_R_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_6_MM_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_1_ANNI_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_2_ANNI_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_3_ANNI_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_5_ANNI_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+        "CLI_INSOLUTO_PIU_ANNI_CLIIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"}},
+      },
+
+
+    "MetricaDataUltLetturaAttivSwinPwr": {
+        # "COD_POD": {"values":"primary_key"},  # chiave primaria
+        # "TRACKING_ID_ULT_SWIN": {"values":"not_used"}, # chiave secondaria di identificazione delle letture
+        "DATA_ULT_LETTURA_ATTIV_SWINPWR": {"pandas_type":"date","pyspark_type":"date","values":"yyyy-mm-dd"}, # data dell'ultima lettura di switch-in o attivazione
+      },
+    "MetricaDataUltLetturaAttivSwinGas": {
+        # "COD_PDR": {"values":"primary_key"},  # chiave primaria
+        # "TRACKING_ID_ULT_SWIN": {"values":"not_used"}, # chiave secondaria di identificazione delle letture
+        "DATA_ULT_LETTURA_ATTIV_SWINGAS": {"pandas_type":"date","pyspark_type":"date","values":"yyyy-mm-dd"}, # data dell'ultima lettura di switch-in o attivazione
+      },
+  }
+
+engineered_features:
+  ante_save_master: {
+      # i.e. post-processing master
+    "FLG_COMTY_GAS": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["POD_PDR"]},
+    "FLG_COGNOME_UGUALE": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["COGNOME","COGNOME_CLIIN"]},
+    "FLG_EMAIL_UGUALE": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["EMAIL","EMAIL_CLIIN"]},
+    "FLG_TELEFONO_UGUALE": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["TELEFONO","TELEFONO_CLIIN"]},
+    "FLG_COMUNE_UGUALE": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_COM","IND_FORN_COMUNE"]},
+    "FLG_PROV_UGUALE": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_PROV","IND_FORN_COD_PROV"]},
+    "FLG_REGIONE_UGUALE": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_REG","IND_FORN_REGIONE"]},
+    "FLG_NAZ_UGUALE": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_NAZ"]},
+    "CLI_AGE_RANGE_18-30": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_AGE"]},
+    "CLI_AGE_RANGE_30-40": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_AGE"]},
+    "CLI_AGE_RANGE_40-50": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_AGE"]},
+    "CLI_AGE_RANGE_50-60": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_AGE"]},
+    "CLI_AGE_RANGE_60-70": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_AGE"]},
+    "CLI_AGE_RANGE_70-80": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_AGE"]},
+    "CLI_AGE_RANGE_80-200": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False, ""],"origin_fields":["CLI_AGE"]},
+    "AGING_METER_ATTIV_SWIN": {"pandas_type":"float64","pyspark_type":"float","values":{"min":0,"null":"true"},"origin_fields":["DATA_ULT_LETTURA_ATTIV_SWINPWR","DATA_ULT_LETTURA_ATTIV_SWINGAS"]},
+
+    "ENCOD_SDF_CANLE_ATTIVAZ_ATT_CLIIN": {"pandas_type":"category","pyspark_type":"string","values":["WEB", "WPU", "WAS", "CWE", "FLA", "TLI","TLO","EXC","ESE", "AGE","AGM","DEA",""],"origin_fields":["SDF_CANLE_ATTIVAZ_ATT_CLIIN"]},
+    "ENCOD_MACROSEGMENTO": {"pandas_type":"category","pyspark_type":"string","values":["RES", "BIZ","COND","PA",""],"origin_fields":["MACROSEGMENTO"]},
+    "ENCOD_MACROSEGMENTO_CLIIN": {"pandas_type":"category","pyspark_type":"string","values":["RES", "BIZ","COND","PA",""],"origin_fields":["MACROSEGMENTO_CLIIN"]},
+    }
+  post_save_master: {
+    # i.e. pre-processing model
+            }
+
+util_columns: {
+  # "DATA_SNAPSHOT": {"pandas_type":"date","pyspark_type":"date","values":"yyyy-mm-dd"},
+  "snapshot_date": {"pandas_type":"date","pyspark_type":"date","values":"yyyy-mm-dd"},
+  "UTILITY_SET": {"pandas_type":"category","pyspark_type":"string","values":["train", "calib", "test"]},
+  "FLG_INSOLUTO": {"pandas_type":"bool","pyspark_type":"boolean","values":[True, False]}
+}
+
+not_predictors_but_utils : [
+    "POD_PDR",
+    "COD_FISCALE_PIVA",
+    "COD_FISCALE_PIVA_CLIIN",
+
+    "FLG_CLI_MOROSO", # target
+    "PERC_MANCATI_INCASSI_RATE",
+    "FATTURATO_RATE",
+    "MANCATI_INCASSI_RATE",
+    "IMPORTI_INCASSATI", # targets informations
+
+    "UTILITY_SET",
+    "FLG_INSOLUTO", # campo creato nel pre-processing, utile solo per la model evaluation ma inutile per il training
+    # "DATA_SNAPSHOT",
+    "snapshot_date",
+  ]
+
+not_predictors: [
+    "FLG_MOROSITA_FORN", # flag della morosità pregressa usato nel modello deterministico
+
+    # codici ad alta cardinalità
+    "COD_FISCALE_PIVA",
+    "COD_FISCALE_PIVA_CLIIN",
+    "POD_PDR",
+    "POD_PDR_CLIIN",
+
+    # si tengono solo gli omonimi campi del cliente uscente o volturato
+    "IND_FORN_CAP_CLIIN",
+    "IND_FORN_COMUNE_CLIIN",
+    "IND_FORN_COD_PROV_CLIIN",
+    "IND_FORN_REGIONE_CLIIN",
+
+    # Dati sulle volture non utilizzabili come predittori
+    "FLG_VOLTURE_NETTE",
+    "FLG_VOLTURE_LORDE",
+    "FLG_VOLTURA_MORTIS_CAUSA",
+    "DATA_VOLTURA",
+    "DATA_VOLTURA_CLIIN",
+    "DATA_FIRMA_VOLTURA",
+    "DATA_FIRMA_VOLTURA_CLIIN", # non considerate con informazioni predittive
+
+    # Colonne usate per fare features engineering ma non utilizzabili direttamente come predittori
+    "COGNOME", "COGNOME_CLIIN",
+    "TELEFONO", "TELEFONO_CLIIN",
+    "EMAIL", "EMAIL_CLIIN",
+    "CLI_AGE_CLIIN",
+    "DATA_ULT_LETTURA_ATTIV_SWINPWR", "DATA_ULT_LETTURA_ATTIV_SWINGAS", "DATA_ULT_LETTURA_ATTIV_SWIN",
+
+    # Campi non utilizzati delle classi di metriche
+    "PK_PROPOSAL_LINE_ITEM","cod_pod","cod_pdr","COD_FISCALE","PIVA","NOME","RAG_SOCIALE","FORMA_GIURIDICA","PEC",
+    "PK_PROPOSAL_LINE_ITEM_CLIIN","COD_FISCALE_CLIIN","PIVA_CLIIN","NOME_CLIIN","RAG_SOCIALE_CLIIN","FORMA_GIURIDICA_CLIIN","PEC_CLIIN",
+
+    "CODICE_POD_PDR_CLIOUT",
+    "PK_PDF","COD_PDF","IND_FORN_IND","IND_FORN_NOME_PROV",
+    "PK_PDF_CLIIN","IND_FORN_IND_CLIIN","IND_FORN_NOME_PROV_CLIIN",
+
+    "PK_ACCOUNT","CLI_CONT_ORIG","CLI_MACTO","CLI_AGE","CLI_PROV_NASC","CLI_NAZ","CLI_NAZTA","CLI_SEX","CLI_FLG_REG_PORT","CLI_FLG_OPZ_VERDE","SOURCE_CRM",
+    "PK_ACCOUNT_CLIIN","CLI_CONT_ORIG_CLIIN","CLI_MACTO_CLIIN","CLI_PROV_NASC_CLIIN","CLI_NAZ_CLIIN","CLI_NAZTA_CLIIN","CLI_SEX_CLIIN","CLI_FLG_REG_PORT_CLIIN","CLI_FLG_OPZ_VERDE_CLIIN","SOURCE_CRM_CLIIN",
+
+    "PK_ACCOUNT","PK_CONTO_FATT","PK_PDF","FK_QUOTE_PROPOSAL","DATA_ATT_SITO_ATT","SDF_AGING_GG_ATT","SDF_AGING_MM_ATT","CLI_AGING_GG_ATT","CLI_AGING_MM_ATT",
+    "PDF_MACTO","PDF_DATA_SCAD_RATA_LAST","PDF_DATA_SCAD_RATA_ALL",
+    "CLI_DATA_SCAD_RATA_OLDER", "CLI_DATA_SCAD_RATA_OLDER_CLIIN",
+    "COD_POD","COD_PDR","TRACKING_ID_ULT_SWIN",
+
+    # Date di aggiornamento (rinominate) delle metriche e date di snapshot delle on-line tables
+    "DATA_AGGIORNAMENTO", "DATA_AGG_MORPP", "DATA_AGG_SWINPWR", "DATA_AGG_SWINGAS",  "DATA_AGG_INDGTW", "DATA_AGG_SDFAA",  "DATA_AGG_CLIATT",
+    "DATA_AGGIORNAMENTO_CLIIN", "SNAPSHOT_DATE_CLIIN", "SNAPSHOT_MORPRE_CLIIN"
+  ]

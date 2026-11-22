@@ -1,0 +1,30 @@
+resources:
+  jobs:
+    creri_setup_job:
+      name: ${bundle.target}_${bundle.name}_utils_setup
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Workflow per il setup applicativo"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_setup_sp}
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_2_cluster}
+      permissions: ${var.my_permissions}
+      # email_notifications: ${var.my_email_notifications}
+      parameters:
+        - name: product
+          default: ${var.product}
+        - name: cod_env
+          default: ${var.cod_env}
+        - name: build_id
+          default: ${var.build_id}
+      tasks:
+        - task_key: Execute-Script
+          job_cluster_key: creri_job_cluster
+          notebook_task:
+            notebook_path: /Workspace/.../src_setup/00_AiEnviromentSetup
+            base_parameters:
+              git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}

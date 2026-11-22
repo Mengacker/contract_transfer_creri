@@ -1,0 +1,116 @@
+resources:
+  jobs:
+    creri_model_monthly:
+      name: ${bundle.target}_${bundle.name}_model_monthly
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Pipeline di addestramento del modello in base ai dati storici"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_as_sp}
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_1_cluster}
+        - job_cluster_key: creri_job_cluster_log
+          new_cluster: ${var.ai_logging_cluster}
+      permissions: ${var.my_permissions}
+      email_notifications: ${var.my_email_notifications}
+      queue:
+        enabled: true
+      parameters:
+        - name: cod_flowName
+          default: MODEL
+        - name: cod_layerName
+          default: WORKFLOW
+        - name: cod_pipelineID
+          default: "{{job.id}}"
+        - name: cod_productName
+          default: ${bundle.name}
+        - name: experiment_path
+          default: ${var.experiment_path}
+        - name: is_cicd
+          default: "true"
+        - name: cod_workflowName
+          default: "{{job.name}}"
+        - name: RunId
+          default: "{{job.run_id}}"
+        - name: env
+          default: ${bundle.target}
+        - name: snapshot_date
+          default: "{{job.trigger.time.[iso_date]}}"
+
+      tasks:
+        - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_start_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+        - task_key: ModelTuning
+          depends_on:
+            - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/06_ModelTuning
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+        - task_key: ModelTraining
+          depends_on:
+            - task_key: ModelTuning
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/06_ModelTraining
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+
+        - task_key: ModelEvaluation
+          depends_on:
+            - task_key: ModelTraining
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/06_ModelEvaluation
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+
+        - task_key: ModelComparison
+          depends_on:
+            - task_key: ModelEvaluation
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/06_ModelComparison
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+          libraries:
+            - requirements: /Workspace/AI/${bundle.name}/${var.model_name}/files/requirements.txt
+            - whl: /Workspace/Shared/Libraries/metrics-2.27.7-py3-none-any.whl
+
+        - task_key: LOGGING_error
+          depends_on:
+            - task_key: ModelComparison
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_error_flow
+            base_parameters:
+              State: "{{tasks.ModelComparison.result_state}}"
+              Error: "{{tasks.ModelComparison.error_code}}"
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+        - task_key: LOGGING_end
+          depends_on:
+            - task_key: ModelEvaluation
+            - task_key: ModelComparison
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_end_flow
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+
+      schedule:
+        quartz_cron_expression: "0 0 6 1 * ? *" # 1st day of the month at 06:00:00
+        timezone_id: Europe/Amsterdam #  Amsterdam, Berlin, Bern, Rome, Stockholm
+        pause_status: PAUSED

@@ -1,0 +1,145 @@
+resources:
+  jobs:
+    creri_prep_materialization_orchestrator:
+      name: ${bundle.target}_${bundle.name}_prep_materialization_orchestrator
+      tags:
+        FinOpsShowback: ${var.fs_tag}
+        use_case: ${bundle.name}
+        description: "Pipeline di orchestrazione per le materializzazioni dei dati - metriche, cb e masters"
+        git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      run_as:
+        service_principal_name: ${var.run_as_sp}
+      job_clusters:
+        - job_cluster_key: creri_job_cluster
+          new_cluster: ${var.ai_standard_cluster}
+        - job_cluster_key: creri_job_cluster_log
+          new_cluster: ${var.ai_logging_cluster}
+      permissions: ${var.my_permissions}
+      email_notifications: ${var.my_email_notifications}
+      queue:
+        enabled: true
+      parameters:
+        - name: cod_flowName
+          default: PREP_ORCHESTRATOR_MASTER
+        - name: cod_pipelineID
+          default: "{{job.id}}"
+        - name: cod_productName
+          default: "${bundle.name}"
+        - name: cod_workflowName
+          default: "{{job.name}}"
+        - name: RunId
+          default: "{{job.run_id}}"
+        - name: snapshot_date
+          default: "{{job.trigger.time.[iso_date]}}"
+        - name: env
+          default: ${bundle.target}
+
+      tasks:
+        - task_key: LOGGING_start
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_start_flow
+            base_parameters:
+              cod_layerName: WORKFLOW
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+        - task_key: METRICS_setup_flow
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/01_MetricsSetupFlow
+            base_parameters:
+              cod_layerName: PREP_METRICS
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+        - task_key: METRICS
+          depends_on:
+            - task_key: METRICS_setup_flow
+            - task_key: LOGGING_start
+          for_each_task:
+            inputs: "{{tasks.METRICS_setup_flow.values.input_params}}"
+            concurrency: 6
+            task:
+              task_key: METRICS_iteration
+              run_job_task:
+                job_id: ${resources.jobs.creri_metrics_materialization.id}
+                job_parameters:
+                  cod_layerName: PREP_METRICS
+                  input_params: "{{input}}"
+        - task_key: CUSTOMER_BASE_setup_flow
+          depends_on:
+            - task_key: METRICS
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/02_CustomerBasesSetupFlow
+            base_parameters:
+              cod_layerName: PREP_CUSTOMER_BASE
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+        - task_key: CUSTOMER_BASE
+          depends_on:
+            - task_key: CUSTOMER_BASE_setup_flow
+          for_each_task:
+            inputs: "{{tasks.CUSTOMER_BASE_setup_flow.values.input_params}}"
+            concurrency: 5
+            task:
+              task_key: CUSTOMER_BASE_iteration
+              run_job_task:
+                job_id: ${resources.jobs.creri_customer_base_materialization.id}
+                job_parameters:
+                  cod_layerName: PREP_CUSTOMER_BASE
+                  input_params: "{{input}}"
+        - task_key: MASTER_setup_flow
+          depends_on:
+            - task_key: CUSTOMER_BASE
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/03_TrainingMastersSetupFlow
+            base_parameters:
+              cod_layerName: PREP_MASTER_TRAINING
+            source: WORKSPACE
+          min_retry_interval_millis: 900000
+          job_cluster_key: creri_job_cluster_log
+        - task_key: MASTER
+          depends_on:
+            - task_key: MASTER_setup_flow
+          for_each_task:
+            inputs: "{{tasks.MASTER_setup_flow.values.input_params}}"
+            concurrency: 5
+            task:
+              task_key: MASTER_iteration
+              run_job_task:
+                job_id: ${resources.jobs.creri_master_materialization.id}
+                job_parameters:
+                  cod_layerName: PREP_MASTER_TRAINING
+                  input_params: "{{input}}"
+        - task_key: MASTER_TRAINING_CUSTOM
+          depends_on:
+            - task_key: MASTER
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/04_FinalTrainingMasterMaterialization
+            base_parameters:
+              cod_layerName: PREP_MASTER_TRAINING
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster
+        - task_key: LOGGING_end
+          depends_on:
+            - task_key: MASTER_TRAINING_CUSTOM
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_end_flow
+            base_parameters:
+              cod_layerName: WORKFLOW
+            source: WORKSPACE
+          job_cluster_key: creri_job_cluster_log
+        - task_key: LOGGING_error
+          depends_on:
+            - task_key: MASTER_TRAINING_CUSTOM
+          run_if: ALL_FAILED
+          notebook_task:
+            notebook_path: /Workspace/AI/${bundle.name}/${var.model_name}/files/notebooks/logging/LOGGING_error_flow
+            base_parameters:
+              State: "{{tasks.MASTER_TRAINING_CUSTOM.result_state}}"
+              Error: "{{tasks.MASTER_TRAINING_CUSTOM.error_code}}"
+            source: WORKSPACE
+          max_retries: 2
+          min_retry_interval_millis: 5000
+          job_cluster_key: creri_job_cluster_log
+      schedule:
+        quartz_cron_expression: "0 0 2 1 * ? *" # 1st day of the month at 02:00:00
+        timezone_id: Europe/Amsterdam #  Amsterdam, Berlin, Bern, Rome, Stockholm
+        pause_status: PAUSED
